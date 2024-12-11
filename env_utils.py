@@ -76,7 +76,7 @@ class SawyerBin(
     self._partially_observable = False
     self._freeze_rand_vec = False
     self._set_task_called = True
-    self._fixed_start_end=fixed_start_end
+    self._fixed_start_end = fixed_start_end
     self.reset()
 
   def reset(self):
@@ -106,7 +106,7 @@ class SawyerBin(
     r = float(dist < 0.05)  # Taken from metaworld
     done = False
     info = {}
-        
+    # the obs returned by this env is [state; goal]
     return obs, r, done, info
 
   def _get_obs(self):
@@ -123,7 +123,6 @@ class SawyerBin(
     # higher than the block center
     goal = np.concatenate([self._goal + np.array([0.0, 0.0, 0.03]),
                            [0.4], self._goal])
-
     return np.concatenate([obs, goal]).astype(np.float32)
 
   @property
@@ -142,7 +141,7 @@ class SawyerBox(
     self._goal_pos = np.zeros(3)
     self._goal_quat = np.zeros(4)
     super(SawyerBox, self).__init__()
-    self._fixed_start_end=fixed_start_end
+    self._fixed_start_end = fixed_start_end
     self._set_task_called = True
     self._partially_observable = False
     self._freeze_rand_vec = False

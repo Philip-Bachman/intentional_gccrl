@@ -1,6 +1,6 @@
 """Contrastive RL agent."""
 
-from contrastive.agents import DistributedContrastive
+from contrastive.agents import ContrastiveDistributedLayout
 from contrastive.builder import ContrastiveBuilder
 from contrastive.config import ContrastiveConfig
 from contrastive.config import target_entropy_from_env_spec

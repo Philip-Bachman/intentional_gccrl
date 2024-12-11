@@ -56,19 +56,19 @@ class ContrastiveConfig:
   no_repr: bool = False
   repr_dim: Union[int, str] = 64  # Size of representation.
   use_random_actor: bool = True  # Initial with uniform random policy.
-  repr_norm: bool = False
   use_cpc: bool = False
   local: bool = False  # Whether running locally. Disables eval.
   use_td: bool = False
   twin_q: bool = False
   use_image_obs: bool = False
-  random_goals: float = 0.5
+  random_goals: int = 1  # switch for how to sample actor training goals
   jit: bool = True
   add_mc_to_td: bool = False
   resample_neg_actions: bool = False
   
   # Parameters that should be overwritten, based on each environment.
   obs_dim: int = -1
+  goal_dim: int = -1
   max_episode_steps: int = -1
   start_index: int = 0
   end_index: int = -1

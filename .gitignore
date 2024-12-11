@@ -3,8 +3,10 @@
 contrastive/.ipynb_checkpoints/
 __pycache__/
 contrastive/__pycache__/
+logs/
 *.pyc
 *.out
+*.mp4
 tensorboard/
 joblog/
 archived/

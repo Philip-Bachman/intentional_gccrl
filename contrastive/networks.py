@@ -17,6 +17,7 @@ from itertools import product
 # modified Tanh mean to be mapped to tanh(mean) to keep within [-1, 1]
 from distributional import NormalTanhDistribution
 
+
 @dataclasses.dataclass
 class ContrastiveNetworks:
   """Network and pure functions for the Contrastive RL agent."""
@@ -30,7 +31,7 @@ class ContrastiveNetworks:
 
 def apply_policy_and_sample(
     networks,
-    eval_mode = False):
+    eval_mode=False):
   """Returns a function that computes actions."""
   sample_fn = networks.sample if not eval_mode else networks.sample_eval
   if not sample_fn:
@@ -41,112 +42,125 @@ def apply_policy_and_sample(
   return apply_and_sample
 
 
+def make_mlp(
+    hidden_layer_sizes,
+    out_size=None,
+    out_layer=None,
+    use_ln=True):
+  assert (out_size is None) or (out_layer is None)         # this is just a simple function :-(
+  assert not ((out_size is None) and (out_layer is None))  # this is just a simple function :-(
+  # make mlp with given hidden layer sizes and output size,
+  # with optional layernorm after each non-final linear layer.
+  layer_sizes = hidden_layer_sizes
+  is_final = [False for s in hidden_layer_sizes]
+  if out_size is not None:
+    layer_sizes = layer_sizes + (out_size,)
+    is_final = is_final + [True]
+  layer_list = []
+  for lsz, isf in zip(layer_sizes, is_final):
+    layer_list.append(hk.Linear(lsz, w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform')))
+    if not isf:
+      # maybe add layernorm after all non-final linear layers
+      if use_ln:
+        layer_list.append(hk.LayerNorm(-1, True, True))
+      # add relu after all non-final linear layers
+      layer_list.append(jax.nn.relu)
+  if out_layer is not None:
+    layer_list.append(out_layer)
+  mlp = hk.Sequential(layer_list)
+  return mlp
+
+
 def make_networks(
     spec,
     obs_dim,
+    goal_dim,
     repr_dim = 64,
-    repr_norm = False,
-    repr_norm_temp = False,
     hidden_layer_sizes = (256, 256),
     actor_min_std = 1e-6,
-    twin_q = False,
     use_image_obs = False):
   """Creates networks used by the agent."""
 
   num_dimensions = np.prod(spec.actions.shape, dtype=int)
   TORSO = networks_lib.AtariTorso  # pylint: disable=invalid-name
 
-  def _unflatten_obs(obs):
-    state = jnp.reshape(obs[:, :obs_dim], (-1, 64, 64, 3)) / 255.0
-    goal = jnp.reshape(obs[:, obs_dim:], (-1, 64, 64, 3)) / 255.0
-    return state, goal
+  def _unflatten_obs(obs_packed):
+    state = jnp.reshape(obs_packed[:, :obs_dim], (-1, 64, 64, 3)) / 255.0
+    intent = jnp.reshape(obs_packed[:, obs_dim:], (-1, 64, 64, 3)) / 255.0
+    return state, intent
 
-  def _repr_fn(obs, action, hidden=None):
-    # The optional input hidden is the image representations. We include this
-    # as an input for the second Q value when twin_q = True, so that the two Q
-    # values use the same underlying image representation.
-    if hidden is None:
-      if use_image_obs:
-        state, goal = _unflatten_obs(obs)
-        img_encoder = TORSO()
-        state = img_encoder(state)
-        goal = img_encoder(goal)
-      else:
-        state = obs[:, :obs_dim]
-        goal = obs[:, obs_dim:]
-    else:
-      state, goal = hidden
-
-    sa_encoder = hk.nets.MLP(
-        list(hidden_layer_sizes) + [repr_dim],
-        w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
-        activation=jax.nn.relu,
-        name='sa_encoder')
-    sa_repr = sa_encoder(jnp.concatenate([state, action], axis=-1))
-
-    g_encoder = hk.nets.MLP(
-        list(hidden_layer_sizes) + [repr_dim],
-        w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
-        activation=jax.nn.relu,
-        name='g_encoder')
-    g_repr = g_encoder(goal)
-
-    if repr_norm:
-      sa_repr = sa_repr / jnp.linalg.norm(sa_repr, axis=1, keepdims=True)
-      g_repr = g_repr / jnp.linalg.norm(g_repr, axis=1, keepdims=True)
-
-      if repr_norm_temp:
-        log_scale = hk.get_parameter('repr_log_scale', [], dtype=sa_repr.dtype,
-                                     init=jnp.zeros)
-        sa_repr = sa_repr / jnp.exp(log_scale)
-    return sa_repr, g_repr, (state, goal)
-
-    
-  def _combine_repr(sa_repr, g_repr):
-    return jax.numpy.einsum('ik,jk->ij', sa_repr, g_repr)
-
-  def _critic_fn(obs, action):
-    sa_repr, g_repr, hidden = _repr_fn(obs, action)
-    critic_val = _combine_repr(sa_repr, g_repr)
-    if twin_q:
-      sa_repr2, g_repr2, _ = _repr_fn(obs, action, hidden=hidden)
-      product2 = _combine_repr(sa_repr2, g_repr2)
-      # outer.shape = [batch_size, batch_size, 2]
-      critic_val = jnp.stack([product, product2], axis=-1)
-      sa_repr = sa_repr2
-      g_repr = g_repr2
-    return critic_val, sa_repr, g_repr
-
-  def _actor_fn(obs):
+  def _repr_fn(obs_packed, action, goal):
+    # obs_packed: should contain current state and intent policy conditions on
+    # action: should contain action
+    # goal: state we want to predict in the future
+    #
     if use_image_obs:
-      state, goal = _unflatten_obs(obs)
-      obs = jnp.concatenate([state, goal], axis=-1)
-      obs = TORSO()(obs)
-    network = hk.Sequential([
-        hk.nets.MLP(
-            list(hidden_layer_sizes),
-            w_init=hk.initializers.VarianceScaling(1.0, 'fan_in', 'uniform'),
-            activation=jax.nn.relu,
-            activate_final=True),
-        NormalTanhDistribution(num_dimensions, min_scale=actor_min_std),
-    ])
-    return network(obs)
+      state, intent = _unflatten_obs(obs_packed)
+      img_encoder = TORSO()
+      state = img_encoder(state)
+      intent = img_encoder(intent)
+      goal = img_encoder(goal)
+    else:
+      state = obs_packed[:, :obs_dim]
+      intent = obs_packed[:, obs_dim:]
+    # TODO:  deal with conditioning on policy goal/intent
+    intent = 0. * intent
+
+    # encoder for (state, action, intent)
+    sai_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim, out_layer=None, use_ln=True)
+    sai_repr = sai_encoder(jnp.concatenate([state, action, intent], axis=-1))
+
+    # encoder for goals (assume same format/type as state and intent)
+    g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim, out_layer=None, use_ln=True)
+    g_repr = g_encoder(goal)
+    return sai_repr, g_repr
+
+  def _combine_repr(sai_repr, g_repr):
+    return jax.numpy.einsum('ik,jk->ij', sai_repr, g_repr)
+
+  def _critic_fn(obs_packed, action, goal):
+    sai_repr, g_repr = _repr_fn(obs_packed, action, goal)
+    critic_val = _combine_repr(sai_repr, g_repr)
+    return critic_val, sai_repr, g_repr
+
+  def _actor_fn(obs_packed):
+    if use_image_obs:
+      state, intent = _unflatten_obs(obs_packed)
+      obs_packed = jnp.concatenate([state, intent], axis=-1)
+      obs_packed = TORSO()(obs_packed)
+    dist_layer = NormalTanhDistribution(num_dimensions, min_scale=actor_min_std, rescale=0.99)
+    network = make_mlp(hidden_layer_sizes, out_size=None, out_layer=dist_layer, use_ln=True)
+    return network(obs_packed)
 
   policy = hk.without_apply_rng(hk.transform(_actor_fn))
   critic = hk.without_apply_rng(hk.transform(_critic_fn))
   repr_fn = hk.without_apply_rng(hk.transform(_repr_fn))
 
   # Create dummy observations and actions to create network parameters.
+  # -- It's VERY important to note that the "observation" expected here is
+  #    a "packed" observation that includes both a current environment state
+  #    and a future goal state of the same form as the current state.
   dummy_action = utils.zeros_like(spec.actions)
-  dummy_obs = utils.zeros_like(spec.observations)
+  dummy_obs = utils.zeros_like(spec.observations)       # obs is like [state; goal/intent]
+  dummy_state = utils.zeros_like(dummy_obs[:obs_dim])
+  dummy_goal = utils.zeros_like(dummy_obs[obs_dim:])  # intent and goal are same shape
+  dummy_intent = utils.zeros_like(dummy_goal)  # intent and goal are same shape
+  # ...  
   dummy_action = utils.add_batch_dim(dummy_action)
-  dummy_obs = utils.add_batch_dim(dummy_obs)
+  dummy_state = utils.add_batch_dim(dummy_state)
+  dummy_goal = utils.add_batch_dim(dummy_goal)
+  dummy_intent = utils.add_batch_dim(dummy_intent)
+  # packed observation, as fed to policy by the environment
+  # -- make this a bit tedious, to belabour the point
+  dummy_packed_obs = jnp.concatenate([dummy_state, dummy_intent], axis=-1)
+  policy_network = networks_lib.FeedForwardNetwork(
+          lambda key: policy.init(key, dummy_packed_obs), policy.apply)
+  q_network = networks_lib.FeedForwardNetwork(
+          lambda key: critic.init(key, dummy_packed_obs, dummy_action, dummy_goal), critic.apply)
 
   return ContrastiveNetworks(
-      policy_network=networks_lib.FeedForwardNetwork(
-          lambda key: policy.init(key, dummy_obs), policy.apply),
-      q_network=networks_lib.FeedForwardNetwork(
-          lambda key: critic.init(key, dummy_obs, dummy_action), critic.apply),
+      policy_network=policy_network,
+      q_network=q_network,
       repr_fn=repr_fn.apply,
       log_prob=lambda params, actions: params.log_prob(actions),
       sample=lambda params, key: params.sample(seed=key),

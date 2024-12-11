@@ -4,8 +4,14 @@ import dataclasses
 import logging
 from typing import Any, Callable, Optional, Sequence
 
+import dm_env
+import jax
+import launchpad as lp
+import numpy as np
+import reverb
+import tqdm
+
 from acme import core
-from acme import environment_loop
 from acme import specs
 from acme.agents.jax import builders
 from acme.jax import networks as networks_lib
@@ -16,13 +22,9 @@ from acme.utils import counting
 from acme.utils import loggers
 from acme.utils import lp_utils
 from acme.utils import observers as observers_lib
+
 from default import make_default_logger
-import dm_env
-import jax
-import launchpad as lp
-import numpy as np
-import reverb
-import tqdm
+from contrastive.environment_loop import FancyEnvironmentLoop
 
 
 ActorId = int
@@ -45,79 +47,6 @@ EvaluatorFactory = Callable[[
 ], core.Worker]
 
 
-def get_default_logger_fn(
-    log_to_bigtable = False,
-    log_every = 10,
-    save_dir = "logs",
-    add_uid = True):
-  """Creates an actor logger."""
-
-  def create_logger(actor_id):
-    return make_default_logger(
-        'actor',
-        save_data=(log_to_bigtable and actor_id == 0),
-        save_dir=save_dir,
-        add_uid=add_uid,
-        time_delta=log_every,
-        steps_key='actor_steps')
-  return create_logger
-
-
-def default_evaluator_factory(
-    environment_factory,
-    network_factory,
-    policy_factory,
-    observers = (),
-    log_to_bigtable = False,
-    save_dir = "logs",
-    add_uid = True):
-  """Returns a default evaluator process."""
-  def evaluator(
-      random_key,
-      variable_source,
-      counter,
-      make_actor,
-  ):
-    """The evaluation process."""
-
-    # Create environment and evaluator networks
-    environment_key, actor_key = jax.random.split(random_key)
-    # Environments normally require uint32 as a seed.
-    environment = environment_factory(utils.sample_uint32(environment_key))
-    networks = network_factory(specs.make_environment_spec(environment))
-
-    actor = make_actor(actor_key, policy_factory(networks), variable_source)
-
-    # Create logger and counter.
-    counter = counting.Counter(counter, 'evaluator')
-    logger = make_default_logger('evaluator', log_to_bigtable,
-                                         save_dir=save_dir,
-                                         add_uid=add_uid,
-                                         steps_key='actor_steps')
-
-    # Create the run loop and return it.
-    return environment_loop.EnvironmentLoop(environment, actor, counter,
-                                            logger, observers=observers)
-  return evaluator
-
-
-@dataclasses.dataclass
-class CheckpointingConfig:  
-  def __init__(
-      self,
-      save_dir = 'logs',
-      add_uid = True):
-    
-    """Configuration options for learner checkpointer."""
-    # The maximum number of checkpoints to keep.
-    self.max_to_keep: int = 10
-    # Which directory to put the checkpoint in.
-    self.directory: str = save_dir
-    # If True adds a UID to the checkpoint path, see
-    # `paths.get_unique_id()` for how this UID is generated.
-    self.add_uid: bool = add_uid
-
-
 class DistributedLayout:
   """Program definition for a distributed agent based on a builder."""
 
@@ -135,7 +64,6 @@ class DistributedLayout:
       evaluator_factories = (),
       device_prefetch = True,
       prefetch_size = 1,
-      log_to_bigtable = False,
       max_number_of_steps = None,
       observers = (),
       multithreading_colocate_learner_and_reverb = False,
@@ -144,8 +72,8 @@ class DistributedLayout:
 
     if prefetch_size < 0:
       raise ValueError(f'Prefetch size={prefetch_size} should be non negative')
-
-    actor_logger_fn = actor_logger_fn or get_default_logger_fn(log_to_bigtable)
+    if actor_logger_fn is None:
+      raise ValueError(f'actor_logger_fn={actor_logger_fn} should be a logger ')
 
     self._seed = seed
     self._builder = builder
@@ -155,7 +83,6 @@ class DistributedLayout:
     self._environment_spec = environment_spec
     self._num_actors = num_actors
     self._device_prefetch = device_prefetch
-    self._log_to_bigtable = log_to_bigtable
     self._prefetch_size = prefetch_size
     self._max_number_of_steps = max_number_of_steps
     self._actor_logger_fn = actor_logger_fn
@@ -193,6 +120,7 @@ class DistributedLayout:
   ):
     """The Learning part of the agent."""
 
+    # make a replay buffer iterator
     iterator = self._builder.make_dataset_iterator(replay)
 
     dummy_seed = 1
@@ -230,10 +158,15 @@ class DistributedLayout:
         time_delta_minutes=self._config.time_delta_minutes,
         **kwargs)
 
-  def actor(self, random_key, replay,
-            variable_source, counter,
-            actor_id):
-    """The actor process."""
+  def actor(
+      self,
+      random_key,
+      replay,
+      variable_source,
+      counter,
+      actor_id
+  ):
+    """Actor process for interacting wth environment and collecting data."""
     adder = self._builder.make_adder(replay)
 
     environment_key, actor_key = jax.random.split(random_key)
@@ -245,16 +178,16 @@ class DistributedLayout:
 
     networks = self._network_factory(specs.make_environment_spec(environment))
     policy_network = self._policy_network(networks)
-    actor = self._builder.make_actor(actor_key, policy_network, adder,
-                                     variable_source)
+    actor = self._builder.make_actor(actor_key, policy_network, variable_source,
+                                     adder=adder)
 
     # Create logger and counter.
     counter = counting.Counter(counter, 'actor')
     # Only actor #0 will write to bigtable in order not to spam it too much.
     logger = self._actor_logger_fn(actor_id)
     # Create the loop to connect environment and agent.
-    return environment_loop.EnvironmentLoop(environment, actor, counter,
-                                            logger, observers=self._observers)
+    return FancyEnvironmentLoop(environment, actor, counter,
+                                logger, observers=self._observers)
 
   def coordinator(self, counter, max_actor_steps):
     steps_key = 'actor_steps'
@@ -291,18 +224,12 @@ class DistributedLayout:
       else:
         learner = program.add_node(learner_node)
 
-    def make_actor(random_key,
-                   policy_network,
-                   variable_source):
-      return self._builder.make_actor(
-          random_key, policy_network, variable_source=variable_source)
-
     with program.group('evaluator'):
       for evaluator in self._evaluator_factories:
         evaluator_key, key = jax.random.split(key)
         program.add_node(
             lp.CourierNode(evaluator, evaluator_key, learner, counter,
-                           make_actor))
+                          self._builder.make_actor))
 
     with program.group('actor'):
       for actor_id in range(self._num_actors):

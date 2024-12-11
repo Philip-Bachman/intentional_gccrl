@@ -16,7 +16,6 @@ import dm_env
 import env_utils
 import jax
 import numpy as np
-from torch.utils.tensorboard import SummaryWriter
 import os
 
 def obs_to_goal_1d(obs, start_index, end_index):
@@ -33,32 +32,46 @@ def obs_to_goal_2d(obs, start_index, end_index):
 
 
 class SuccessObserver(observers_base.EnvLoopObserver):
-  """Measures success by whether any of the rewards in an episode are positive.
-  """
+  """Observe each episode and report success if any rewards are > 0.
 
+  This success metric assumes (roughly) that we're watching the agent act in
+  a goal reaching environmment with indicator reward for reaching the goal.
+  """
   def __init__(self):
     self._rewards = []
     self._success = []
 
-  def observe_first(self, env, timestep
-                    ):
-    """Observes the initial state."""
+  def observe_first(self, env, timestep):
+    """What to do following environment reset."""
+    # If self._rewards is not empty list, then the environment was reset after
+    # a completed episode observed by this observer.
     if self._rewards:
       success = np.sum(self._rewards) >= 1
       self._success.append(success)
+    # set list of observed rewards back to empty to start this new episode
     self._rewards = []
 
-  def observe(self, env, timestep,
-              action):
-    """Records one environment step."""
-    assert timestep.reward in [0, 1]
+  def observe(self, env, timestep, action):
+    """Record reward from one environment step."""
+    assert timestep.reward in [0, 1]  # enforce "goal reaching" task assumption
     self._rewards.append(timestep.reward)
 
   def get_metrics(self):
     """Returns metrics collected for the current episode."""
+    if len(self._rewards) > 0:
+      success_1 = float(np.sum(self._rewards) >= 1)
+    else:
+      success_1 = 0.
+    if len(self._success) < 1000:
+      if len(self._success) > 1:
+        success_1k = np.mean(self._success)
+      else:
+        success_1k = 0.
+    else:
+      success_1k = np.mean(self._success[-1000:])
     return {
-        'success': float(np.sum(self._rewards) >= 1),
-        'success_1000': np.mean(self._success[-1000:]),
+        'success': success_1,
+        'success_1000': success_1k,
     }
 
 
@@ -82,8 +95,8 @@ class DistanceObserver(observers_base.EnvLoopObserver):
     else:
       # Note that the timestep comes from the environment, which has already
       # had some goal coordinates removed.
-      obs = timestep.observation[:self._obs_dim]
-      goal = timestep.observation[self._obs_dim:]
+      obs = timestep.observation[:self._obs_dim]  
+      goal = timestep.observation[self._obs_dim:]  # environments cat "full" goal onto observation
       dist = np.linalg.norm(self._obs_to_goal(obs) - goal)
       return dist
 
@@ -140,7 +153,7 @@ class ObservationFilterWrapper(base.EnvironmentWrapper):
         dtype=spec_min.dtype,
         minimum=spec_min,
         maximum=spec_max,
-        name='state')
+        name='state') 
 
   def _convert_observation(self, observation):
     return observation[self._idx]
@@ -160,7 +173,8 @@ class ObservationFilterWrapper(base.EnvironmentWrapper):
 
 
 def make_environment(env_name, start_index, end_index,
-                     seed, fixed_start_end = None):
+                     seed, fixed_start_end=None,
+                     return_extra=False):
   """Creates the environment.
 
   Args:
@@ -178,6 +192,7 @@ def make_environment(env_name, start_index, end_index,
   gym_env, obs_dim, max_episode_steps = env_utils.load(env_name, fixed_start_end)
   goal_indices = obs_dim + obs_to_goal_1d(np.arange(obs_dim), start_index,
                                           end_index)
+  goal_dim = len(goal_indices)
   indices = np.concatenate([
       np.arange(obs_dim),
       goal_indices
@@ -185,16 +200,23 @@ def make_environment(env_name, start_index, end_index,
   env = gym_wrapper.GymWrapper(gym_env)
   env = step_limit.StepLimitWrapper(env, step_limit=max_episode_steps)
   env = ObservationFilterWrapper(env, indices)
-  return env, obs_dim
+  if return_extra:
+    return env, obs_dim, goal_dim
+  else:
+    return env
 
 
-class InitiallyRandomActor(actors.GenericActor):
-  """Actor that takes actions uniformly at random until the actor is updated.
+class InitiallyRandomGaussianActor(actors.GenericActor):
+  """Crazy way of sampling random actions until first actor update.
   """
 
   def select_action(self,
                     observation):
-    if (self._params['mlp/~/linear_0']['b'] == 0).all():
+    # decide whether agent has been updated based on whether some params
+    # in the "distributional" layer of policy are still precisely 0
+    # -- checking equality on floats is a questionable practice, lol
+    # -- assuming 0 init for params is kinda iffy, lol
+    if (self._params['Normal/~/linear']['b'] == 0).all():
       shape = self._params['Normal/~/linear']['b'].shape
       rng, self._state = jax.random.split(self._state)
       action = jax.random.uniform(key=rng, shape=shape,

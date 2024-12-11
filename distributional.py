@@ -37,115 +37,6 @@ class CategoricalHead(hk.Module):
     return tfd.Categorical(logits=logits, dtype=self._dtype)
 
 
-class GaussianMixture(hk.Module):
-  """Module that outputs a Gaussian Mixture Distribution."""
-
-  def __init__(self,
-               num_dimensions: int,
-               num_components: int,
-               multivariate: bool,
-               init_scale: Optional[float] = None,
-               append_singleton_event_dim: bool = False,
-               reinterpreted_batch_ndims: Optional[int] = None,
-               name: str = 'GaussianMixture'):
-    """Initialization.
-
-    Args:
-      num_dimensions: dimensionality of the output distribution
-      num_components: number of mixture components.
-      multivariate: whether the resulting distribution is multivariate or not.
-      init_scale: the initial scale for the Gaussian mixture components.
-      append_singleton_event_dim: (univariate only) Whether to add an extra
-        singleton dimension to the event shape.
-      reinterpreted_batch_ndims: (univariate only) Number of batch dimensions to
-        reinterpret as event dimensions.
-      name: name of the module passed to snt.Module parent class.
-    """
-    super().__init__(name=name)
-
-    self._num_dimensions = num_dimensions
-    self._num_components = num_components
-    self._multivariate = multivariate
-    self._append_singleton_event_dim = append_singleton_event_dim
-    self._reinterpreted_batch_ndims = reinterpreted_batch_ndims
-
-    if init_scale is not None:
-      self._scale_factor = init_scale / jax.nn.softplus(0.)
-    else:
-      self._scale_factor = 1.0  # Corresponds to init_scale = softplus(0).
-
-  def __call__(self,
-               inputs: jnp.ndarray,
-               low_noise_policy: bool = False) -> tfd.Distribution:
-    """Run the networks through inputs.
-
-    Args:
-      inputs: hidden activations of the policy network body.
-      low_noise_policy: whether to set vanishingly small scales for each
-        component. If this flag is set to True, the policy is effectively run
-        without Gaussian noise.
-
-    Returns:
-      Mixture Gaussian distribution.
-    """
-
-    # Define the weight initializer.
-    w_init = hk.initializers.VarianceScaling(scale=1e-5)
-
-    # Create a layer that outputs the unnormalized log-weights.
-    if self._multivariate:
-      logits_size = self._num_components
-    else:
-      logits_size = self._num_dimensions * self._num_components
-    logit_layer = hk.Linear(logits_size, w_init=w_init)
-
-    # Create two layers that outputs a location and a scale, respectively, for
-    # each dimension and each component.
-    loc_layer = hk.Linear(
-        self._num_dimensions * self._num_components, w_init=w_init)
-    scale_layer = hk.Linear(
-        self._num_dimensions * self._num_components, w_init=w_init)
-
-    # Compute logits, locs, and scales if necessary.
-    logits = logit_layer(inputs)
-    locs = loc_layer(inputs)
-
-    # When a low_noise_policy is requested, set the scales to its minimum value.
-    if low_noise_policy:
-      scales = jnp.full(locs.shape, _MIN_SCALE)
-    else:
-      scales = scale_layer(inputs)
-      scales = self._scale_factor * jax.nn.softplus(scales) + _MIN_SCALE
-
-    if self._multivariate:
-      components_class = tfd.MultivariateNormalDiag
-      shape = [-1, self._num_components, self._num_dimensions]  # [B, C, D]
-      # In this case, no need to reshape logits as they are in the correct shape
-      # already, namely [batch_size, num_components].
-    else:
-      components_class = tfd.Normal
-      shape = [-1, self._num_dimensions, self._num_components]  # [B, D, C]
-      if self._append_singleton_event_dim:
-        shape.insert(2, 1)  # [B, D, 1, C]
-      logits = logits.reshape(shape)
-
-    # Reshape the mixture's location and scale parameters appropriately.
-    locs = locs.reshape(shape)
-    scales = scales.reshape(shape)
-
-    # Create the mixture distribution.
-    distribution = tfd.MixtureSameFamily(
-        mixture_distribution=tfd.Categorical(logits=logits),
-        components_distribution=components_class(loc=locs, scale=scales))
-
-    if not self._multivariate:
-      distribution = tfd.Independent(
-          distribution,
-          reinterpreted_batch_ndims=self._reinterpreted_batch_ndims)
-
-    return distribution
-
-
 class TanhTransformedDistribution(tfd.TransformedDistribution):
   """Distribution followed by tanh."""
 
@@ -212,7 +103,8 @@ class NormalTanhDistribution(hk.Module):
                min_scale: float = 1e-3,
                w_init: hk_init.Initializer = hk_init.VarianceScaling(
                    1.0, 'fan_in', 'uniform'),
-               b_init: hk_init.Initializer = hk_init.Constant(0.)):
+               b_init: hk_init.Initializer = hk_init.Constant(0.),
+               rescale: float = 1.0):
     """Initialization.
 
     Args:
@@ -225,48 +117,15 @@ class NormalTanhDistribution(hk.Module):
     self._min_scale = min_scale
     self._loc_layer = hk.Linear(num_dimensions, w_init=w_init, b_init=b_init)
     self._scale_layer = hk.Linear(num_dimensions, w_init=w_init, b_init=b_init)
-    self._bijector=tfp.bijectors.Tanh()
+    self._rescale = tfp.bijectors.Scale(scale=rescale)
 
   def __call__(self, inputs: jnp.ndarray) -> tfd.Distribution:
-    loc = self._loc_layer(inputs)
-    loc = 10 * self._bijector.forward(loc / 10)
-    scale = self._scale_layer(inputs)
-    scale = jax.nn.softplus(scale) + self._min_scale
+    loc = 10. * jax.lax.tanh(self._loc_layer(inputs) / 10.)
+    scale = jax.nn.softplus(self._scale_layer(inputs)) + self._min_scale
     distribution = tfd.Normal(loc=loc, scale=scale)
-    return tfd.Independent(
-        TanhTransformedDistribution(distribution), reinterpreted_batch_ndims=1)
-
-
-class MultivariateNormalDiagHead(hk.Module):
-  """Module that produces a tfd.MultivariateNormalDiag distribution."""
-
-  def __init__(self,
-               num_dimensions: int,
-               init_scale: float = 0.3,
-               min_scale: float = 1e-6,
-               w_init: hk_init.Initializer = hk_init.VarianceScaling(1e-4),
-               b_init: hk_init.Initializer = hk_init.Constant(0.)):
-    """Initialization.
-
-    Args:
-      num_dimensions: Number of dimensions of MVN distribution.
-      init_scale: Initial standard deviation.
-      min_scale: Minimum standard deviation.
-      w_init: Initialization for linear layer weights.
-      b_init: Initialization for linear layer biases.
-    """
-    super().__init__(name='MultivariateNormalDiagHead')
-    self._min_scale = min_scale
-    self._init_scale = init_scale
-    self._loc_layer = hk.Linear(num_dimensions, w_init=w_init, b_init=b_init)
-    self._scale_layer = hk.Linear(num_dimensions, w_init=w_init, b_init=b_init)
-
-  def __call__(self, inputs: jnp.ndarray) -> tfd.Distribution:
-    loc = self._loc_layer(inputs)
-    scale = jax.nn.softplus(self._scale_layer(inputs))
-    scale *= self._init_scale / jax.nn.softplus(0.)
-    scale += self._min_scale
-    return tfd.MultivariateNormalDiag(loc=loc, scale_diag=scale)
+    distribution = TanhTransformedDistribution(distribution)
+    distribution = tfd.TransformedDistribution(distribution, self._rescale)
+    return tfd.Independent(distribution, reinterpreted_batch_ndims=1)
 
 
 class CategoricalValueHead(hk.Module):
@@ -286,33 +145,3 @@ class CategoricalValueHead(hk.Module):
     value = jnp.squeeze(self._value_layer(inputs), axis=-1)
     return (tfd.Categorical(logits=logits), value)
 
-
-class DiscreteValued(hk.Module):
-  """C51-style head.
-
-  For each action, it produces the logits for a discrete distribution over
-  atoms. Therefore, the returned logits represents several distributions, one
-  for each action.
-  """
-
-  def __init__(
-      self,
-      num_actions: int,
-      head_units: int = 512,
-      num_atoms: int = 51,
-      v_min: float = -1.0,
-      v_max: float = 1.0,
-  ):
-    super().__init__('DiscreteValued')
-    self._num_actions = num_actions
-    self._num_atoms = num_atoms
-    self._atoms = jnp.linspace(v_min, v_max, self._num_atoms)
-    self._network = hk.nets.MLP([head_units, num_actions * num_atoms])
-
-  def __call__(self, inputs: jnp.ndarray):
-    q_logits = self._network(inputs)
-    q_logits = jnp.reshape(q_logits, (-1, self._num_actions, self._num_atoms))
-    q_dist = jax.nn.softmax(q_logits)
-    q_values = jnp.sum(q_dist * self._atoms, axis=2)
-    q_values = jax.lax.stop_gradient(q_values)
-    return q_values, q_logits, self._atoms

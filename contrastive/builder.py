@@ -19,6 +19,7 @@ from contrastive import config as contrastive_config
 from contrastive import learning
 from contrastive import networks as contrastive_networks
 from contrastive import utils as contrastive_utils
+import jax
 import optax
 import reverb
 from reverb import rate_limiters
@@ -32,7 +33,7 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
   def __init__(
       self,
       config,
-      logger_fn = lambda: None,
+      logger_fn
   ):
     """Creates a contrastive RL learner, a behavior policy and an eval actor.
 
@@ -48,13 +49,17 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
       random_key,
       networks,
       dataset,
-      replay_client = None,
-      counter = None,
+      counter=None
   ):
+    print('**************************')
+    print('**************************')
+    print('***** MAKING LEARNER *****')
+    print('**************************')
+    print('**************************')
     # Create optimizers
     policy_optimizer = optax.adam(
-        learning_rate=self._config.actor_learning_rate, eps=1e-7)
-    q_optimizer = optax.adam(learning_rate=self._config.learning_rate, eps=1e-7)
+        learning_rate=self._config.actor_learning_rate, eps=1e-5)
+    q_optimizer = optax.adam(learning_rate=self._config.learning_rate, eps=1e-5)
     return learning.ContrastiveLearner(
         networks=networks,
         rng=random_key,
@@ -63,25 +68,20 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
         iterator=dataset,
         counter=counter,
         logger=self._logger_fn(),
-        obs_to_goal=functools.partial(contrastive_utils.obs_to_goal_2d,
-                                      start_index=self._config.start_index,
-                                      end_index=self._config.end_index),
         config=self._config)
 
   def make_actor(
       self,
       random_key,
       policy_network,
-      adder = None,
-      variable_source = None):
-    assert variable_source is not None
-    actor_core = actor_core_lib.batched_feed_forward_to_actor_core(
-        policy_network)
-    variable_client = variable_utils.VariableClient(variable_source, 'policy',
-                                                    device='cpu')
+      variable_source,
+      adder = None):
+    actor_core = actor_core_lib.batched_feed_forward_to_actor_core(policy_network)
+    variable_client = \
+      variable_utils.VariableClient(variable_source, 'policy', device='cpu')
     
     if self._config.use_random_actor:
-      ACTOR = contrastive_utils.InitiallyRandomActor  # pylint: disable=invalid-name
+      ACTOR = contrastive_utils.InitiallyRandomGaussianActor  # pylint: disable=invalid-name
     else:
       ACTOR = actors.GenericActor  # pylint: disable=invalid-name
     return ACTOR(
@@ -112,8 +112,9 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
             signature=adders_reverb.EpisodeAdder.signature(environment_spec, {}))  # pylint: disable=line-too-long
     ]
 
-  def make_dataset_iterator(
-      self, replay_client):
+  def make_dataset_iterator(self,
+      replay_client
+    ):
     """Create a dataset iterator to use for learning/updating the agent."""
     @tf.function
     def flatten_fn(sample):
@@ -123,23 +124,26 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
       discount = self._config.discount ** tf.cast(arange[None] - arange[:, None], tf.float32)  # pylint: disable=line-too-long
       probs = is_future_mask * discount
       # The indexing changes the shape from [seq_len, 1] to [seq_len]
-      goal_index = tf.random.categorical(logits=tf.math.log(probs),
+      future_index = tf.random.categorical(logits=tf.math.log(probs),
                                          num_samples=1)[:, 0]
       state = sample.data.observation[:-1, :self._config.obs_dim]
       next_state = sample.data.observation[1:, :self._config.obs_dim]
+
+      # goal that was conditioned on during each episode...
+      eps_intent = sample.data.observation[:-1, self._config.obs_dim:]
 
       # Create the goal observations in three steps.
       # 1. Take all future states (not future goals).
       # 2. Apply obs_to_goal.
       # 3. Sample one of the future states. Note that we don't look for a goal
       # for the final state, because there are no future states.
-      goal = sample.data.observation[:, :self._config.obs_dim]
-      goal = contrastive_utils.obs_to_goal_2d(
-          goal, start_index=self._config.start_index,
+      future_state = sample.data.observation[:, :self._config.obs_dim]
+      future_state = contrastive_utils.obs_to_goal_2d(
+          future_state, start_index=self._config.start_index,
           end_index=self._config.end_index)
-      goal = tf.gather(goal, goal_index[:-1])
-      new_obs = tf.concat([state, goal], axis=1)
-      new_next_obs = tf.concat([next_state, goal], axis=1)
+      future_state = tf.gather(future_state, future_index[:-1])
+      new_obs = tf.concat([state, future_state], axis=1)
+      new_next_obs = tf.concat([next_state, future_state], axis=1)
       
       transition = types.Transition(
           observation=new_obs,
@@ -148,7 +152,9 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
           discount=sample.data.discount[:-1],
           next_observation=new_next_obs,
           extras={
-              'next_action': sample.data.action[1:],
+              'state_current': state,
+              'state_future': future_state,
+              'episode_intent': eps_intent
           })
       # Shift for the transpose_shuffle.
       shift = tf.random.uniform((), 0, seq_len, tf.int32)
@@ -203,7 +209,8 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
     return dataset.as_numpy_iterator()
 
   def make_adder(self,
-                 replay_client):
+      replay_client
+  ):
     """Create an adder to record data generated by the actor/environment."""
     return adders_reverb.EpisodeAdder(
         client=replay_client,
