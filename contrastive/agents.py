@@ -101,8 +101,8 @@ class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
 
   def __init__(
       self,
-      environment_factory,
-      environment_factory_fixed_goals,
+      environment_factory_train,
+      environment_factory_eval,
       network_factory,
       config,
       seed,
@@ -136,7 +136,7 @@ class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
     ]
     evaluator_factories = [
         default_evaluator_factory(
-            environment_factory=environment_factory_fixed_goals,
+            environment_factory=environment_factory_eval,
             network_factory=network_factory,
             policy_factory=eval_policy_factory,
             observers=eval_observers,
@@ -159,7 +159,7 @@ class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
                                           use_tboard=True)
     super().__init__(
         seed=seed,
-        environment_factory=environment_factory,
+        environment_factory=environment_factory_train,
         network_factory=network_factory,
         builder=contrastive_builder,
         evaluator_factories=evaluator_factories,

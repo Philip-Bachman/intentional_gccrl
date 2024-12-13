@@ -72,18 +72,18 @@ def get_program(params):
       hidden_layer_sizes=config.hidden_layer_sizes)
   
   # factory for training environments (may sample goals)
-  env_factory = lambda seed: contrastive.make_environment(
+  environment_factory = lambda seed: contrastive.make_environment(
       env_name, seed, latent_dim=None, fixed_goal=fixed_goal,
       return_extra=False)
   # factory for evaluation environments (use fixed goals)
-  env_factory_fixed_goals = lambda seed: contrastive.make_environment(
+  environment_factory_fixed_goals = lambda seed: contrastive.make_environment(
       env_name, seed, latent_dim=None, fixed_goal=fixed_goal_dict[env_name],
       return_extra=False)
     
   agent = contrastive.ContrastiveDistributedLayout(
       seed=seed,
-      environment_factory=env_factory,
-      environment_factory_fixed_goals=env_factory_fixed_goals,
+      environment_factory_train=environment_factory,
+      environment_factory_eval=environment_factory_fixed_goals,
       network_factory=network_factory,
       config=config,
       num_actors=config.num_actors,

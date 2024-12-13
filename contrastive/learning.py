@@ -128,6 +128,7 @@ class ContrastiveLearner(acme.Learner):
       # -- ie, goal and intent are the same
       state = transitions.extras['state_current']
       goal = transitions.extras['state_future']
+      intent = transitions.extras['episode_intent']
 
       if config.random_goals == 0:
         # train actor only on intra-episode future states
@@ -141,6 +142,10 @@ class ContrastiveLearner(acme.Learner):
         # train actor only on random states
         train_state = state
         train_goal = jnp.roll(goal, 1, axis=0)
+
+      # TEMP -- train also on true goal
+      train_state = jnp.concatenate([train_state, state], axis=0)
+      train_goal = jnp.concatenate([train_goal, intent], axis=0)
 
       obs_packed = jnp.concatenate([train_state, train_goal], axis=1)
       dist_params = networks.policy_network.apply(policy_params, obs_packed)
@@ -158,11 +163,14 @@ class ContrastiveLearner(acme.Learner):
       if config.use_action_entropy:
         actor_loss -= alpha * approx_entropy # negative -(-log prob): maximize entropy
 
+      # rescale parts of the loss
+      n_batch = state.shape[0]
+      actor_loss = jnp.mean(actor_loss[:(2 * n_batch)]) + 0.01 * jnp.mean(actor_loss[(2 * n_batch):])
+
       metrics = {
           'entropy_mean': jnp.mean(approx_entropy),
       }
 
-      
       return jnp.mean(actor_loss), metrics
 
     # compute gradients for actor and critic

@@ -77,7 +77,7 @@ class DistributedLayout:
       specs.make_environment_spec(environment_factory(dummy_seed))
     print('********************************************')
     print('********************************************')
-    print('self._dumm_environment_spec: {}'.format(self._dummy_environment_spec))
+    print('self._dummy_environment_spec: {}'.format(self._dummy_environment_spec))
     print('********************************************')
     print('********************************************')
 
@@ -141,7 +141,6 @@ class DistributedLayout:
     environment_key, actor_key = jax.random.split(random_key)
 
     # environments normally require uint32 as a seed.
-    # TODO: make it possible to hand replay buffer iterator to environment
     environment = self._environment_factory(
         utils.sample_uint32(environment_key))
 

@@ -50,16 +50,18 @@ class SawyerBin(
     metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['bin-picking-v2']):
   """Wrapper for the SawyerBin environment."""
 
-  def __init__(self, fixed_goal=None):
+  def __init__(self, fixed_goal=None, use_latent=False):
     self._goal = np.zeros(3)
     super(SawyerBin, self).__init__()
     self._partially_observable = False
     self._freeze_rand_vec = False
     self._set_task_called = True
     self._fixed_goal = fixed_goal
+    self._use_latent = use_latent
+    self._latent = None
     self.reset()
 
-  def reset(self):
+  def reset(self, eps_goal=None, eps_latent=None):
     super(SawyerBin, self).reset()
     body_id = self.model.body_name2id('bin_goal')
     pos1 = self.sim.data.body_xpos[body_id].copy()
@@ -67,12 +69,12 @@ class SawyerBin(
     pos2 = self._get_pos_objects().copy()
     
     if self._fixed_goal is not None:
-        # Set the goal to be a fixed location
+        # set the goal to be a fixed location
         self._goal = self._fixed_goal 
     else:
+        # set the goal to be random location between
+        # the starting and end point
         t = np.random.random()
-        # Set the goal to be a uniformly sampled location
-        # between the starting and end point
         self._goal = t * pos1 + (1 - t) * pos2
         self._goal[2] = np.random.uniform(0.03, 0.12)
     self._target_pos = self._goal
@@ -117,7 +119,7 @@ class SawyerBox(
     metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['box-close-v2']):
   """Wrapper for the SawyerBox environment."""
 
-  def __init__(self, fixed_goal=None):
+  def __init__(self, fixed_goal=None, use_latent=False):
     self._goal_pos = np.zeros(3)
     self._goal_quat = np.zeros(4)
     super(SawyerBox, self).__init__()
@@ -125,9 +127,11 @@ class SawyerBox(
     self._set_task_called = True
     self._partially_observable = False
     self._freeze_rand_vec = False
+    self._use_latent = use_latent
+    self._latent = None
     self.reset()
 
-  def reset(self):
+  def reset(self, eps_goal=None, eps_latent=None):
     super(SawyerBox, self).reset()
     pos1 = self._target_pos.copy()
     pos2 = self._get_pos_objects().copy()
@@ -157,7 +161,6 @@ class SawyerBox(
     r = float(dist_pos < 0.08 and dist_quat < 0.08)  # Taken from metaworld
     done = False
     info = {}
-    
     return obs, r, done, info
 
   def _get_obs(self):
@@ -191,16 +194,18 @@ class SawyerPeg(
     metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['peg-insert-side-v2']):
   """Wrapper for the SawyerPeg environment."""
 
-  def __init__(self, fixed_goal=None):
+  def __init__(self, fixed_goal=None, use_latent=False):
     self._goal_pos = np.zeros(3)
     super(SawyerPeg, self).__init__()
     self._fixed_goal = fixed_goal
     self._set_task_called = True
     self._partially_observable = False
     self._freeze_rand_vec = False
+    self._use_latent = use_latent
+    self._latent = None
     self.reset()
 
-  def reset(self):
+  def reset(self, eps_goal=None, eps_latent=None):
     super(SawyerPeg, self).reset()
     pos1 = self._target_pos.copy()
     pos2 = self._get_site_pos("pegHead")
@@ -237,7 +242,7 @@ class SawyerPeg(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0., 1.)
     
-    obj_pos_head = self._get_site_pos("pegHead") 
+    obj_pos_head = self._get_site_pos("pegHead")
     obj_pos_grasp = self._get_pos_objects()
     obs = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos_head))
     # the ideal goal state has the peg head in the hole and the gripper slightly 

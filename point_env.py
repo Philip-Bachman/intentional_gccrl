@@ -105,8 +105,8 @@ def resize_walls(walls, factor):
 class PointEnv(gym.Env):
   """Abstract class for 2D navigation environments."""
 
-  def __init__(self,
-               walls = None, resize_factor = 1, fixed_task = None):
+  def __init__(self, walls = None, resize_factor = 1, fixed_task = None,
+               use_latent = False):
     """Initialize the point environment.
 
     Args:
@@ -127,15 +127,19 @@ class PointEnv(gym.Env):
         low=np.array([-1.0, -1.0]),
         high=np.array([1.0, 1.0]),
         dtype=np.float32)
+    self.box_low = np.array([0, 0, 0, 0])
+    self.box_high = np.array([height, width, height, width])
     self.observation_space = gym.spaces.Box(
-        low=np.array([0, 0, 0, 0]),
-        high=np.array([height, width, height, width]),
-        dtype=np.float32)
+        low=np.full(4, -np.inf),
+        high=np.full(4, np.inf),
+    dtype=np.float32)
     self._timestep = 0
     if '11x11' in walls:
       self._max_episode_steps = 100
     else:
       self._max_episode_steps = 50
+    self._use_latent = use_latent
+    self._latent = None
     self.reset()
 
   def _sample_empty_state(self):
@@ -152,16 +156,17 @@ class PointEnv(gym.Env):
   def _get_obs(self):
     return np.concatenate([self.state, self.goal]).astype(np.float32)
 
-  def reset(self):
+  def reset(self, eps_goal=None, eps_latent=None):
     self._timestep = 0
-    
     if self._fixed_task is not None:
-        # fix the starting and ending position of the agent
-        self.state = self._fixed_task[0]
-        self.goal = self._fixed_task[1]
+      # fix the starting and ending position of the agent
+      self.state = self._fixed_task[0]
+      self.goal = self._fixed_task[1]
     else:
-        self.goal = self._sample_empty_state()
-        self.state = self._sample_empty_state()
+      self.goal = self._sample_empty_state()
+      self.state = self._sample_empty_state()
+    if eps_goal is not None:
+      self.goal = eps_goal
     return self._get_obs()
 
   def _discretize_state(self, state, resolution=1.0):
@@ -171,8 +176,8 @@ class PointEnv(gym.Env):
 
   def _is_blocked(self, state):
     assert len(state) == 2
-    if (np.any(state < self.observation_space.low[:2])
-        or np.any(state > self.observation_space.high[:2])):
+    if (np.any(state < self.box_low[:2])
+        or np.any(state > self.box_high[:2])):
       return True
     (i, j) = self._discretize_state(state)
     return (self._walls[i, j] == 1)
