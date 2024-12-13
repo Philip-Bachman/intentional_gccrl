@@ -21,7 +21,6 @@ from acme.jax import utils
 from acme.utils import counting
 from acme.utils import loggers
 from acme.utils import lp_utils
-from acme.utils import observers as observers_lib
 
 from default import make_default_logger
 from contrastive.environment_loop import FancyEnvironmentLoop
@@ -43,7 +42,7 @@ class DistributedLayout:
       device_prefetch = True,
       prefetch_size = 1,
       max_number_of_steps = None,
-      observers = (),
+      actor_observers = (),
       multithreading_colocate_learner_and_reverb = False,
       checkpointing_config = None,
       config = None):
@@ -63,7 +62,7 @@ class DistributedLayout:
     self._max_number_of_steps = max_number_of_steps
     self._actor_logger_fn = actor_logger_fn
     self._evaluator_factories = evaluator_factories
-    self._observers = observers
+    self._actor_observers = actor_observers
     self._multithreading_colocate_learner_and_reverb = (
         multithreading_colocate_learner_and_reverb)
     self._checkpointing_config = checkpointing_config
@@ -155,14 +154,23 @@ class DistributedLayout:
     logger = self._actor_logger_fn(actor_id)
     # Create the loop to connect environment and agent.
     return FancyEnvironmentLoop(environment, actor, counter,
-                                logger, observers=self._observers,
-                                rb_iterator=rb_iterator)
+                                logger, observers=self._actor_observers,
+                                rb_iterator=rb_iterator,
+                                rb_warmup=10)
 
-  def coordinator(self, counter, max_actor_steps):
+  def coordinator(
+      self,
+      counter,
+      max_actor_steps
+  ):
     steps_key = 'actor_steps'
     return lp_utils.StepsLimiter(counter, max_actor_steps, steps_key=steps_key)
 
-  def build(self, name='agent', program = None):
+  def build(
+      self,
+      name='agent',
+      program=None
+  ):
     """Build the distributed agent topology."""
     if not program:
       program = lp.Program(name=name)

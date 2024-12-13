@@ -80,7 +80,8 @@ class DistanceObserver(observers_base.EnvLoopObserver):
       return env._dist[-1]
     else:
       # if environment doesn't provide a built-in distance metric, then
-      # we'll just use simple euclidean distance
+      # we'll just use simple euclidean distance.
+      # -- we assume packed observation like [state; goal; intent]
       obs = timestep.observation[:self._obs_dim]
       goal = timestep.observation[self._obs_dim:(self._obs_dim + self._goal_dim)]
       dist = np.linalg.norm(obs - goal)
@@ -118,8 +119,7 @@ class DistanceObserver(observers_base.EnvLoopObserver):
 
 def make_environment(env_name, seed,
                      latent_dim=None,
-                     fixed_goal=None,
-                     return_extra=False):
+                     fixed_goal=None):
   """Creates the environment.
 
   Args:
@@ -133,17 +133,11 @@ def make_environment(env_name, seed,
     seed: random seed.
   Returns:
     env: the environment
-    obs_dim: dimension of observation
-    goal_dim: dimension of goal (same as observation for now)
   """
 
   np.random.seed(seed)
   gym_env, obs_dim, max_episode_steps = env_utils.load(env_name, fixed_goal)
-  goal_dim = obs_dim  # assume simple, "fully specified goal" environments for now
   env = gym_wrapper.GymWrapper(gym_env)
   env = step_limit.StepLimitWrapper(env, step_limit=max_episode_steps)
-  if return_extra:
-    return env, obs_dim, goal_dim
-  else:
-    return env
+  return env
 

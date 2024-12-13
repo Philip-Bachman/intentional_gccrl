@@ -132,7 +132,7 @@ class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
         contrastive_utils.SuccessObserver(),
         contrastive_utils.DistanceObserver(
             obs_dim=config.obs_dim,
-            goal_dim=config.obs_dim)
+            goal_dim=config.goal_dim)
     ]
     evaluator_factories = [
         default_evaluator_factory(
@@ -151,7 +151,7 @@ class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
     actor_observers = [
         contrastive_utils.SuccessObserver(),
         contrastive_utils.DistanceObserver(obs_dim=config.obs_dim,
-                                           goal_dim=config.obs_dim)]
+                                           goal_dim=config.goal_dim)]
     actor_logger_dir = config.log_dir + config.alg_name + '_' + config.env_name + '_' + str(seed)
     actor_logger_fn = get_actor_logger_fn(log_every,
                                           save_dir=actor_logger_dir,
@@ -167,7 +167,7 @@ class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
         max_number_of_steps=max_number_of_steps,
         prefetch_size=config.prefetch_size,
         actor_logger_fn=actor_logger_fn,
-        observers=actor_observers,
+        actor_observers=actor_observers,
         checkpointing_config=CheckpointingConfig(
             save_dir = config.log_dir + config.alg_name + '_'
             + config.env_name + '_' + str(seed), add_uid=config.add_uid),

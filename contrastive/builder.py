@@ -55,11 +55,6 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
       dataset,
       counter=None
   ):
-    print('**************************')
-    print('**************************')
-    print('***** MAKING LEARNER *****')
-    print('**************************')
-    print('**************************')
     # Create optimizers
     policy_optimizer = optax.adam(
         learning_rate=self._config.actor_learning_rate, eps=1e-5)
@@ -123,7 +118,7 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
       prefetch_size=1,
       device_prefetch=True
     ):
-    """Create a dataset iterator to use for learning/updating the agent.
+    """Create an iterator for sampling from the replay buffer.
     
     We assume a contrastive environment which provides "packed" observations
     like: [state; goal; latent].

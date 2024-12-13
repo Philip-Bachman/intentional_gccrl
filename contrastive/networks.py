@@ -83,7 +83,7 @@ def make_networks(
     goal_dim,
     repr_dim = 64,
     hidden_layer_sizes = (256, 256),
-    actor_min_std = 1e-6,
+    actor_min_std = 1e-2,
     use_image_obs = False):
   """Creates networks used by the agent."""
 

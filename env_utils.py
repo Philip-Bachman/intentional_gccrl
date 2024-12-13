@@ -59,7 +59,10 @@ class SawyerBin(
     self._fixed_goal = fixed_goal
     self._use_latent = use_latent
     self._latent = None
-    self.reset()
+    dummy_obs = self.reset()
+      # make obs_dim and goal_dim easily accessible
+    self.obs_dim = dummy_obs.shape[0] // 2
+    self.goal_dim = dummy_obs.shape[0] // 2
 
   def reset(self, eps_goal=None, eps_latent=None):
     super(SawyerBin, self).reset()
@@ -129,7 +132,11 @@ class SawyerBox(
     self._freeze_rand_vec = False
     self._use_latent = use_latent
     self._latent = None
-    self.reset()
+    dummy_obs = self.reset()
+      # make obs_dim and goal_dim easily accessible
+    self.obs_dim = dummy_obs.shape[0] // 2
+    self.goal_dim = dummy_obs.shape[0] // 2
+
 
   def reset(self, eps_goal=None, eps_latent=None):
     super(SawyerBox, self).reset()
@@ -203,7 +210,10 @@ class SawyerPeg(
     self._freeze_rand_vec = False
     self._use_latent = use_latent
     self._latent = None
-    self.reset()
+    dummy_obs = self.reset()
+      # make obs_dim and goal_dim easily accessible
+    self.obs_dim = dummy_obs.shape[0] // 2
+    self.goal_dim = dummy_obs.shape[0] // 2
 
   def reset(self, eps_goal=None, eps_latent=None):
     super(SawyerPeg, self).reset()
@@ -247,8 +257,7 @@ class SawyerPeg(
     obs = np.concatenate((pos_hand, [gripper_distance_apart], obj_pos_head))
     # the ideal goal state has the peg head in the hole and the gripper slightly 
     # higher than the middle of the peg
-    goal = np.concatenate([self._goal_pos + np.array([0.13, 0.0, 0.03]),
-                           [0.4], self._goal_pos])
+    goal = np.concatenate([self._goal_pos + np.array([0.13, 0.0, 0.03]), [0.4], self._goal_pos])
     return np.concatenate([obs, goal]).astype(np.float32)
 
   @property

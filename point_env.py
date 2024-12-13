@@ -140,7 +140,10 @@ class PointEnv(gym.Env):
       self._max_episode_steps = 50
     self._use_latent = use_latent
     self._latent = None
-    self.reset()
+    dummy_obs = self.reset()
+    # make obs_dim and goal_dim easily accessible
+    self.obs_dim = dummy_obs.shape[0] // 2
+    self.goal_dim = dummy_obs.shape[0] // 2
 
   def _sample_empty_state(self):
     candidate_states = np.where(self._walls == 0)

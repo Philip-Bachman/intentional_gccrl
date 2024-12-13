@@ -54,15 +54,15 @@ def get_program(params):
   else:
     fixed_goal = None
 
-  environment, obs_dim, goal_dim = \
+  dummy_env = \
     contrastive.make_environment(env_name, seed=seed, latent_dim=None,
-                                 fixed_goal=fixed_goal, return_extra=True)
+                                 fixed_goal=fixed_goal)
 
-  assert (environment.action_spec().minimum == -1).all()
-  assert (environment.action_spec().maximum == 1).all()
-  config.obs_dim = obs_dim
-  config.goal_dim = goal_dim
-  config.max_episode_steps = getattr(environment, '_step_limit') + 1
+  assert (dummy_env.action_spec().minimum == -1).all()
+  assert (dummy_env.action_spec().maximum == 1).all()
+  config.obs_dim = dummy_env.obs_dim
+  config.goal_dim = dummy_env.goal_dim
+  config.max_episode_steps = getattr(dummy_env, '_step_limit') + 1
   network_factory = functools.partial(
       contrastive.make_networks,
       obs_dim=config.obs_dim,
@@ -73,12 +73,10 @@ def get_program(params):
   
   # factory for training environments (may sample goals)
   environment_factory = lambda seed: contrastive.make_environment(
-      env_name, seed, latent_dim=None, fixed_goal=fixed_goal,
-      return_extra=False)
+      env_name, seed, latent_dim=None, fixed_goal=fixed_goal)
   # factory for evaluation environments (use fixed goals)
   environment_factory_fixed_goals = lambda seed: contrastive.make_environment(
-      env_name, seed, latent_dim=None, fixed_goal=fixed_goal_dict[env_name],
-      return_extra=False)
+      env_name, seed, latent_dim=None, fixed_goal=fixed_goal_dict[env_name])
     
   agent = contrastive.ContrastiveDistributedLayout(
       seed=seed,

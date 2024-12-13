@@ -155,7 +155,12 @@ class ContrastiveLearner(acme.Learner):
       # TODO:  deal with conditioning on policy goal/intent
       q_action, _, _ = networks.q_network.apply(q_params, obs_packed, action, train_goal)
 
-      actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
+      # ...
+      batch_size = q_action.shape[0]
+      I = jnp.eye(batch_size)
+
+      actor_loss = jnp.diag(optax.softmax_cross_entropy(logits=q_action, labels=I))
+      # actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
 
       # action entropy loss
       approx_entropy = -log_prob
