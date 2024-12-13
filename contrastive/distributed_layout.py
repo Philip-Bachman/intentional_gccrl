@@ -25,26 +25,7 @@ from acme.utils import observers as observers_lib
 
 from default import make_default_logger
 from contrastive.environment_loop import FancyEnvironmentLoop
-
-
-ActorId = int
-AgentNetwork = Any
-PolicyNetwork = Any
-NetworkFactory = Callable[[specs.EnvironmentSpec], AgentNetwork]
-PolicyFactory = Callable[[AgentNetwork], PolicyNetwork]
-Seed = int
-EnvironmentFactory = Callable[[Seed], dm_env.Environment]
-MakeActorFn = Callable[[types.PRNGKey, PolicyNetwork, core.VariableSource],
-                       core.Actor]
-LoggerLabel = str
-LoggerStepsKey = str
-LoggerFn = Callable[[LoggerLabel, LoggerStepsKey], loggers.Logger]
-EvaluatorFactory = Callable[[
-    types.PRNGKey,
-    core.VariableSource,
-    counting.Counter,
-    MakeActorFn,
-], core.Worker]
+from contrastive.networks import apply_policy_and_sample
 
 
 class DistributedLayout:
@@ -54,12 +35,9 @@ class DistributedLayout:
       self,
       seed,
       environment_factory,
-      environment_factory_fixed_goals,
       network_factory,
       builder,
-      policy_network,
       num_actors,
-      environment_spec = None,
       actor_logger_fn = None,
       evaluator_factories = (),
       device_prefetch = True,
@@ -79,8 +57,6 @@ class DistributedLayout:
     self._builder = builder
     self._environment_factory = environment_factory
     self._network_factory = network_factory
-    self._policy_network = policy_network
-    self._environment_spec = environment_spec
     self._num_actors = num_actors
     self._device_prefetch = device_prefetch
     self._prefetch_size = prefetch_size
@@ -92,14 +68,23 @@ class DistributedLayout:
         multithreading_colocate_learner_and_reverb)
     self._checkpointing_config = checkpointing_config
     self._config = config
+    #
+    # WARNING -- we assume all environments from self._environment_factory
+    #            have the same spec!!!
+    #
+    dummy_seed = 1
+    self._dummy_environment_spec = \
+      specs.make_environment_spec(environment_factory(dummy_seed))
+    print('********************************************')
+    print('********************************************')
+    print('self._dumm_environment_spec: {}'.format(self._dummy_environment_spec))
+    print('********************************************')
+    print('********************************************')
 
   def replay(self):
     """The replay storage."""
-    dummy_seed = 1
-    environment_spec = (
-        self._environment_spec or
-        specs.make_environment_spec(self._environment_factory(dummy_seed)))
-    return self._builder.make_replay_tables(environment_spec)
+    replay_buffer = self._builder.make_replay_tables(self._dummy_environment_spec)
+    return replay_buffer
 
   def counter(self):
     kwargs = {}
@@ -119,34 +104,15 @@ class DistributedLayout:
       counter,
   ):
     """The Learning part of the agent."""
-
-    # make a replay buffer iterator
-    iterator = self._builder.make_dataset_iterator(replay)
-
-    dummy_seed = 1
-    environment_spec = (
-        self._environment_spec or
-        specs.make_environment_spec(self._environment_factory(dummy_seed)))
-
-    # Creates the networks to optimize (online) and target networks.
-    networks = self._network_factory(environment_spec)
-
-    if self._prefetch_size > 1:
-      # When working with single GPU we should prefetch to device for
-      # efficiency. If running on TPU this isn't necessary as the computation
-      # and input placement can be done automatically. For multi-gpu currently
-      # the best solution is to pre-fetch to host although this may change in
-      # the future.
-      device = jax.devices()[0] if self._device_prefetch else None
-      iterator = utils.prefetch(
-          iterator, buffer_size=self._prefetch_size, device=device)
-    else:
-      logging.info('Not prefetching the iterator.')
-
+    # create stuff that will be used by the learner
+    networks = self._network_factory(self._dummy_environment_spec)
+    iterator = self._builder.make_dataset_iterator(
+      replay, self._prefetch_size, self._device_prefetch
+    )
     counter = counting.Counter(counter, 'learner')
 
-    learner = self._builder.make_learner(random_key, networks, iterator, replay,
-                                         counter)
+    learner = self._builder.make_learner(random_key, networks, iterator, counter)
+
     kwargs = {}
     if self._checkpointing_config:
       kwargs = vars(self._checkpointing_config)
@@ -167,19 +133,22 @@ class DistributedLayout:
       actor_id
   ):
     """Actor process for interacting wth environment and collecting data."""
-    adder = self._builder.make_adder(replay)
+    rb_adder = self._builder.make_adder(replay)
+    rb_iterator = self._builder.make_dataset_iterator(
+      replay, self._prefetch_size, self._device_prefetch
+    )
 
     environment_key, actor_key = jax.random.split(random_key)
-    # Create environment and policy core.
 
-    # Environments normally require uint32 as a seed.
+    # environments normally require uint32 as a seed.
+    # TODO: make it possible to hand replay buffer iterator to environment
     environment = self._environment_factory(
         utils.sample_uint32(environment_key))
 
-    networks = self._network_factory(specs.make_environment_spec(environment))
-    policy_network = self._policy_network(networks)
-    actor = self._builder.make_actor(actor_key, policy_network, variable_source,
-                                     adder=adder)
+    networks = self._network_factory(self._dummy_environment_spec)
+    policy_fn = apply_policy_and_sample(networks)
+    actor = self._builder.make_actor(actor_key, policy_fn, variable_source,
+                                     rb_adder=rb_adder)
 
     # Create logger and counter.
     counter = counting.Counter(counter, 'actor')
@@ -187,7 +156,8 @@ class DistributedLayout:
     logger = self._actor_logger_fn(actor_id)
     # Create the loop to connect environment and agent.
     return FancyEnvironmentLoop(environment, actor, counter,
-                                logger, observers=self._observers)
+                                logger, observers=self._observers,
+                                rb_iterator=rb_iterator)
 
   def coordinator(self, counter, max_actor_steps):
     steps_key = 'actor_steps'

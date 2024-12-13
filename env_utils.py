@@ -13,45 +13,25 @@ import point_env
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
 
 
-def euler2quat(euler):
-  """Convert Euler angles to quaternions."""
-  euler = np.asarray(euler, dtype=np.float64)
-  assert euler.shape[-1] == 3, 'Invalid shape euler {}'.format(euler)
-
-  ai, aj, ak = euler[Ellipsis, 2] / 2, -euler[Ellipsis, 1] / 2, euler[Ellipsis, 0] / 2
-  si, sj, sk = np.sin(ai), np.sin(aj), np.sin(ak)
-  ci, cj, ck = np.cos(ai), np.cos(aj), np.cos(ak)
-  cc, cs = ci * ck, ci * sk
-  sc, ss = si * ck, si * sk
-
-  quat = np.empty(euler.shape[:-1] + (4,), dtype=np.float64)
-  quat[Ellipsis, 0] = cj * cc + sj * ss
-  quat[Ellipsis, 3] = cj * sc - sj * cs
-  quat[Ellipsis, 2] = -(cj * ss + sj * cc)
-  quat[Ellipsis, 1] = cj * cs - sj * sc
-  return quat
-
-
-def load(env_name, fixed_start_end=None):
+def load(env_name, fixed_goal=None):
   """Loads the train and eval environments, as well as the obs_dim."""
-  # pylint: disable=invalid-name
   kwargs = {}
   if env_name == 'sawyer_bin':
     CLASS = SawyerBin
     max_episode_steps = 150
-    kwargs['fixed_start_end'] = fixed_start_end
+    kwargs['fixed_goal'] = fixed_goal
   elif env_name == 'sawyer_box':
     CLASS = SawyerBox
     max_episode_steps = 150
-    kwargs['fixed_start_end'] = fixed_start_end
+    kwargs['fixed_goal'] = fixed_goal
   elif env_name == 'sawyer_peg':
     CLASS = SawyerPeg
     max_episode_steps = 150
-    kwargs['fixed_start_end'] = fixed_start_end
+    kwargs['fixed_goal'] = fixed_goal
   elif env_name.startswith('point_'):
     CLASS = point_env.PointEnv
     kwargs['walls'] = env_name.split('_')[-1]
-    kwargs['fixed_start_end'] = fixed_start_end
+    kwargs['fixed_task'] = fixed_goal
     if '11x11' in env_name:
       max_episode_steps = 100
     else:
@@ -70,13 +50,13 @@ class SawyerBin(
     metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['bin-picking-v2']):
   """Wrapper for the SawyerBin environment."""
 
-  def __init__(self, fixed_start_end=None):
+  def __init__(self, fixed_goal=None):
     self._goal = np.zeros(3)
     super(SawyerBin, self).__init__()
     self._partially_observable = False
     self._freeze_rand_vec = False
     self._set_task_called = True
-    self._fixed_start_end = fixed_start_end
+    self._fixed_goal = fixed_goal
     self.reset()
 
   def reset(self):
@@ -86,9 +66,9 @@ class SawyerBin(
     pos1 += np.random.uniform(-0.05, 0.05, 3)
     pos2 = self._get_pos_objects().copy()
     
-    if self._fixed_start_end is not None:
+    if self._fixed_goal is not None:
         # Set the goal to be a fixed location
-        self._goal = self._fixed_start_end 
+        self._goal = self._fixed_goal 
     else:
         t = np.random.random()
         # Set the goal to be a uniformly sampled location
@@ -137,11 +117,11 @@ class SawyerBox(
     metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['box-close-v2']):
   """Wrapper for the SawyerBox environment."""
 
-  def __init__(self, fixed_start_end=None):
+  def __init__(self, fixed_goal=None):
     self._goal_pos = np.zeros(3)
     self._goal_quat = np.zeros(4)
     super(SawyerBox, self).__init__()
-    self._fixed_start_end = fixed_start_end
+    self._fixed_goal = fixed_goal
     self._set_task_called = True
     self._partially_observable = False
     self._freeze_rand_vec = False
@@ -152,7 +132,7 @@ class SawyerBox(
     pos1 = self._target_pos.copy()
     pos2 = self._get_pos_objects().copy()
     
-    if self._fixed_start_end is not None:
+    if self._fixed_goal is not None:
         # Set the goal to be a fixed location
         self._goal_pos = pos1 
     else:
@@ -211,10 +191,10 @@ class SawyerPeg(
     metaworld.envs.mujoco.env_dict.ALL_V2_ENVIRONMENTS['peg-insert-side-v2']):
   """Wrapper for the SawyerPeg environment."""
 
-  def __init__(self, fixed_start_end=None):
+  def __init__(self, fixed_goal=None):
     self._goal_pos = np.zeros(3)
     super(SawyerPeg, self).__init__()
-    self._fixed_start_end=fixed_start_end
+    self._fixed_goal = fixed_goal
     self._set_task_called = True
     self._partially_observable = False
     self._freeze_rand_vec = False
@@ -225,7 +205,7 @@ class SawyerPeg(
     pos1 = self._target_pos.copy()
     pos2 = self._get_site_pos("pegHead")
     
-    if self._fixed_start_end is not None:
+    if self._fixed_goal is not None:
         # Set the goal to be a fixed location
         self._goal_pos = pos1 
     else:

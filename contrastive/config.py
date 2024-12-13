@@ -48,7 +48,7 @@ class ContrastiveConfig:
   num_parallel_calls: Optional[int] = 4
   samples_per_insert: float = 256
   # Rate to be used for the SampleToInsertRatio rate limitter tolerance.
-  # See a formula in make_replay_tables for more details.
+  # See a formula in make_replay_buffer for more details.
   samples_per_insert_tolerance_rate: float = 0.1
   num_sgd_steps_per_step: int = 64  # Gradient updates to perform per step.
   
@@ -69,51 +69,7 @@ class ContrastiveConfig:
   # Parameters that should be overwritten, based on each environment.
   obs_dim: int = -1
   goal_dim: int = -1
+  latent_dim: int = -1
   max_episode_steps: int = -1
-  start_index: int = 0
-  end_index: int = -1
 
 
-def target_entropy_from_env_spec(
-    spec,
-    target_entropy_per_dimension = None,
-):
-  """A heuristic to determine a target entropy.
-
-  If target_entropy_per_dimension is not specified, the target entropy is
-  computed as "-num_actions", otherwise it is
-  "target_entropy_per_dimension * num_actions".
-
-  Args:
-    spec: environment spec
-    target_entropy_per_dimension: None or target entropy per action dimension
-
-  Returns:
-    target entropy
-  """
-
-  def get_num_actions(action_spec):
-    """Returns a number of actions in the spec."""
-    if isinstance(action_spec, specs.BoundedArray):
-      return onp.prod(action_spec.shape, dtype=int)
-    elif isinstance(action_spec, tuple):
-      return sum(get_num_actions(subspace) for subspace in action_spec)
-    else:
-      raise ValueError('Unknown action space type.')
-
-  num_actions = get_num_actions(spec.actions)
-  if target_entropy_per_dimension is None:
-    if not isinstance(spec.actions, specs.BoundedArray) or isinstance(
-        spec.actions, specs.DiscreteArray):
-      raise ValueError('Only accept BoundedArrays for automatic '
-                       f'target_entropy, got: {spec.actions}')
-    if not onp.all(spec.actions.minimum == -1.):
-      raise ValueError(
-          f'Minimum expected to be -1, got: {spec.actions.minimum}')
-    if not onp.all(spec.actions.maximum == 1.):
-      raise ValueError(
-          f'Maximum expected to be 1, got: {spec.actions.maximum}')
-
-    return -num_actions
-  else:
-    return target_entropy_per_dimension * num_actions

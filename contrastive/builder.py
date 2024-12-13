@@ -2,6 +2,13 @@
 import functools
 from typing import Callable, Iterator, List, Optional
 
+import jax
+import optax
+import reverb
+from reverb import rate_limiters
+import tensorflow as tf
+import tree
+
 import acme
 from acme import adders
 from acme import core
@@ -9,22 +16,19 @@ from acme import specs
 from acme import types
 from acme.adders import reverb as adders_reverb
 from acme.agents.jax import actor_core as actor_core_lib
-from acme.agents.jax import actors
 from acme.agents.jax import builders
 from acme.jax import networks as networks_lib
 from acme.jax import variable_utils
+from acme.jax import utils
 from acme.utils import counting
 from acme.utils import loggers
-from contrastive import config as contrastive_config
-from contrastive import learning
-from contrastive import networks as contrastive_networks
-from contrastive import utils as contrastive_utils
-import jax
-import optax
-import reverb
-from reverb import rate_limiters
-import tensorflow as tf
-import tree
+
+import contrastive.config as contrastive_config
+import contrastive.learning as contrastive_learning
+import contrastive.networks as contrastive_networks
+import contrastive.utils as contrastive_utils
+import contrastive.actors as contrastive_actors
+
 
 
 class ContrastiveBuilder(builders.ActorLearnerBuilder):
@@ -60,7 +64,7 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
     policy_optimizer = optax.adam(
         learning_rate=self._config.actor_learning_rate, eps=1e-5)
     q_optimizer = optax.adam(learning_rate=self._config.learning_rate, eps=1e-5)
-    return learning.ContrastiveLearner(
+    return contrastive_learning.ContrastiveLearner(
         networks=networks,
         rng=random_key,
         policy_optimizer=policy_optimizer,
@@ -75,17 +79,18 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
       random_key,
       policy_network,
       variable_source,
-      adder = None):
-    actor_core = actor_core_lib.batched_feed_forward_to_actor_core(policy_network)
+      rb_adder = None
+  ):
+    actor_core = \
+      actor_core_lib.batched_feed_forward_to_actor_core(policy_network)
     variable_client = \
       variable_utils.VariableClient(variable_source, 'policy', device='cpu')
     
-    if self._config.use_random_actor:
-      ACTOR = contrastive_utils.InitiallyRandomGaussianActor  # pylint: disable=invalid-name
-    else:
-      ACTOR = actors.GenericActor  # pylint: disable=invalid-name
-    return ACTOR(
-        actor_core, random_key, variable_client, adder, backend='cpu')
+    _actor = contrastive_actors.ContrastiveGaussianActor(
+      actor_core, random_key, variable_client, rb_adder, backend='cpu',
+      initially_random=self._config.use_random_actor
+    )
+    return _actor
 
   def make_replay_tables(
       self,
@@ -95,13 +100,14 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
     samples_per_insert_tolerance = (
         self._config.samples_per_insert_tolerance_rate
         * self._config.samples_per_insert)
-    min_replay_traj = self._config.min_replay_size  // self._config.max_episode_steps  # pylint: disable=line-too-long
-    max_replay_traj = self._config.max_replay_size  // self._config.max_episode_steps  # pylint: disable=line-too-long
+    min_replay_traj = self._config.min_replay_size  // self._config.max_episode_steps
+    max_replay_traj = self._config.max_replay_size  // self._config.max_episode_steps
     error_buffer = min_replay_traj * samples_per_insert_tolerance
     limiter = rate_limiters.SampleToInsertRatio(
         min_size_to_sample=min_replay_traj,
         samples_per_insert=self._config.samples_per_insert,
         error_buffer=error_buffer)
+    rb_signature = adders_reverb.EpisodeAdder.signature(environment_spec, {})
     return [
         reverb.Table(
             name=self._config.replay_table_name,
@@ -109,19 +115,25 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
             remover=reverb.selectors.Fifo(),
             max_size=max_replay_traj,
             rate_limiter=limiter,
-            signature=adders_reverb.EpisodeAdder.signature(environment_spec, {}))  # pylint: disable=line-too-long
+            signature=rb_signature)
     ]
 
   def make_dataset_iterator(self,
-      replay_client
+      replay_client,
+      prefetch_size=1,
+      device_prefetch=True
     ):
-    """Create a dataset iterator to use for learning/updating the agent."""
+    """Create a dataset iterator to use for learning/updating the agent.
+    
+    We assume a contrastive environment which provides "packed" observations
+    like: [state; goal; latent].
+    """
     @tf.function
     def flatten_fn(sample):
       seq_len = tf.shape(sample.data.observation)[0]
       arange = tf.range(seq_len)
       is_future_mask = tf.cast(arange[:, None] < arange[None], tf.float32)
-      discount = self._config.discount ** tf.cast(arange[None] - arange[:, None], tf.float32)  # pylint: disable=line-too-long
+      discount = self._config.discount ** tf.cast(arange[None] - arange[:, None], tf.float32)
       probs = is_future_mask * discount
       # The indexing changes the shape from [seq_len, 1] to [seq_len]
       future_index = tf.random.categorical(logits=tf.math.log(probs),
@@ -138,9 +150,6 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
       # 3. Sample one of the future states. Note that we don't look for a goal
       # for the final state, because there are no future states.
       future_state = sample.data.observation[:, :self._config.obs_dim]
-      future_state = contrastive_utils.obs_to_goal_2d(
-          future_state, start_index=self._config.start_index,
-          end_index=self._config.end_index)
       future_state = tf.gather(future_state, future_index[:-1])
       new_obs = tf.concat([state, future_state], axis=1)
       new_next_obs = tf.concat([next_state, future_state], axis=1)
@@ -206,7 +215,17 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
     dataset = dataset.map(add_info_fn, num_parallel_calls=tf.data.AUTOTUNE,
                           deterministic=False)
     dataset = dataset.prefetch(tf.data.AUTOTUNE)
-    return dataset.as_numpy_iterator()
+    iterator = dataset.as_numpy_iterator()
+
+    if prefetch_size > 1:
+      # When working with single GPU we should prefetch to device for
+      # efficiency. If running on TPU this isn't necessary as the computation
+      # and input placement can be done automatically. For multi-gpu currently
+      # the best solution is to pre-fetch to host although this may change in
+      # the future.
+      device = jax.devices()[0] if device_prefetch else None
+      iterator = utils.prefetch(iterator, buffer_size=prefetch_size, device=device)
+    return iterator
 
   def make_adder(self,
       replay_client

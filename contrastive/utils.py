@@ -18,18 +18,6 @@ import jax
 import numpy as np
 import os
 
-def obs_to_goal_1d(obs, start_index, end_index):
-  assert len(obs.shape) == 1
-  return obs_to_goal_2d(obs[None], start_index, end_index)[0]
-
-
-def obs_to_goal_2d(obs, start_index, end_index):
-  assert len(obs.shape) == 2
-  if end_index == -1:
-    return obs[:, start_index:]
-  else:
-    return obs[:, start_index:end_index]
-
 
 class SuccessObserver(observers_base.EnvLoopObserver):
   """Observe each episode and report success if any rewards are > 0.
@@ -78,38 +66,34 @@ class SuccessObserver(observers_base.EnvLoopObserver):
 class DistanceObserver(observers_base.EnvLoopObserver):
   """Observer that measures the L2 distance to the goal."""
 
-  def __init__(self, obs_dim, start_index, end_index,
+  def __init__(self, obs_dim, goal_dim,
                smooth = True):
     self._distances = []
     self._obs_dim = obs_dim
-    self._obs_to_goal = functools.partial(
-        obs_to_goal_1d, start_index=start_index, end_index=end_index)
+    self._goal_dim = goal_dim
     self._smooth = smooth
     self._history = {}
 
-  def _get_distance(self, env,
-                    timestep):
+  def _get_distance(self, env, timestep):
     if hasattr(env, '_dist'):
-      assert env._dist  # pylint: disable=protected-access
-      return env._dist[-1]  # pylint: disable=protected-access
+      assert env._dist
+      return env._dist[-1]
     else:
-      # Note that the timestep comes from the environment, which has already
-      # had some goal coordinates removed.
-      obs = timestep.observation[:self._obs_dim]  
-      goal = timestep.observation[self._obs_dim:]  # environments cat "full" goal onto observation
-      dist = np.linalg.norm(self._obs_to_goal(obs) - goal)
+      # if environment doesn't provide a built-in distance metric, then
+      # we'll just use simple euclidean distance
+      obs = timestep.observation[:self._obs_dim]
+      goal = timestep.observation[self._obs_dim:(self._obs_dim + self._goal_dim)]
+      dist = np.linalg.norm(obs - goal)
       return dist
 
-  def observe_first(self, env, timestep
-                    ):
+  def observe_first(self, env, timestep):
     """Observes the initial state."""
     if self._smooth and self._distances:
       for key, value in self._get_current_metrics().items():
         self._history[key] = self._history.get(key, []) + [value]
     self._distances = [self._get_distance(env, timestep)]
 
-  def observe(self, env, timestep,
-              action):
+  def observe(self, env, timestep, action):
     """Records one environment step."""
     self._distances.append(self._get_distance(env, timestep))
 
@@ -132,96 +116,34 @@ class DistanceObserver(observers_base.EnvLoopObserver):
     return metrics
 
 
-class ObservationFilterWrapper(base.EnvironmentWrapper):
-  """Wrapper that exposes just the desired goal coordinates."""
-
-  def __init__(self, environment,
-               idx):
-    """Initializes a new ObservationFilterWrapper.
-
-    Args:
-      environment: Environment to wrap.
-      idx: Sequence of indices of coordinates to keep.
-    """
-    super().__init__(environment)
-    self._idx = idx
-    observation_spec = environment.observation_spec()
-    spec_min = self._convert_observation(observation_spec.minimum)
-    spec_max = self._convert_observation(observation_spec.maximum)
-    self._observation_spec = dm_env.specs.BoundedArray(
-        shape=spec_min.shape,
-        dtype=spec_min.dtype,
-        minimum=spec_min,
-        maximum=spec_max,
-        name='state') 
-
-  def _convert_observation(self, observation):
-    return observation[self._idx]
-
-  def step(self, action):
-    timestep = self._environment.step(action)
-    return timestep._replace(
-        observation=self._convert_observation(timestep.observation))
-
-  def reset(self):
-    timestep = self._environment.reset()
-    return timestep._replace(
-        observation=self._convert_observation(timestep.observation))
-
-  def observation_spec(self):
-    return self._observation_spec
-
-
-def make_environment(env_name, start_index, end_index,
-                     seed, fixed_start_end=None,
+def make_environment(env_name, seed,
+                     latent_dim=None,
+                     fixed_goal=None,
                      return_extra=False):
   """Creates the environment.
 
   Args:
     env_name: name of the environment
-    start_index: first index of the observation to use in the goal.
-    end_index: final index of the observation to use in the goal. The goal
-      is then obs[start_index:goal_index].
+    seed: seed for loading environment
+    latent_dim: latent dim for environment
+    fixed_goal: fixed goal location?
+    return_extra: whether to return some info about the environment
+                  in addition to the environment
+
     seed: random seed.
   Returns:
     env: the environment
-    obs_dim: integer specifying the size of the observations, before
-      the start_index/end_index is applied.
+    obs_dim: dimension of observation
+    goal_dim: dimension of goal (same as observation for now)
   """
+
   np.random.seed(seed)
-  gym_env, obs_dim, max_episode_steps = env_utils.load(env_name, fixed_start_end)
-  goal_indices = obs_dim + obs_to_goal_1d(np.arange(obs_dim), start_index,
-                                          end_index)
-  goal_dim = len(goal_indices)
-  indices = np.concatenate([
-      np.arange(obs_dim),
-      goal_indices
-  ])
+  gym_env, obs_dim, max_episode_steps = env_utils.load(env_name, fixed_goal)
+  goal_dim = obs_dim  # assume simple, "fully specified goal" environments for now
   env = gym_wrapper.GymWrapper(gym_env)
   env = step_limit.StepLimitWrapper(env, step_limit=max_episode_steps)
-  env = ObservationFilterWrapper(env, indices)
   if return_extra:
     return env, obs_dim, goal_dim
   else:
     return env
 
-
-class InitiallyRandomGaussianActor(actors.GenericActor):
-  """Crazy way of sampling random actions until first actor update.
-  """
-
-  def select_action(self,
-                    observation):
-    # decide whether agent has been updated based on whether some params
-    # in the "distributional" layer of policy are still precisely 0
-    # -- checking equality on floats is a questionable practice, lol
-    # -- assuming 0 init for params is kinda iffy, lol
-    if (self._params['Normal/~/linear']['b'] == 0).all():
-      shape = self._params['Normal/~/linear']['b'].shape
-      rng, self._state = jax.random.split(self._state)
-      action = jax.random.uniform(key=rng, shape=shape,
-                                  minval=-1.0, maxval=1.0)
-    else:
-      action, self._state = self._policy(self._params, observation,
-                                         self._state)
-    return utils.to_numpy(action)

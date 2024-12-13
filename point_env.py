@@ -106,7 +106,7 @@ class PointEnv(gym.Env):
   """Abstract class for 2D navigation environments."""
 
   def __init__(self,
-               walls = None, resize_factor = 1, fixed_start_end = None):
+               walls = None, resize_factor = 1, fixed_task = None):
     """Initialize the point environment.
 
     Args:
@@ -122,7 +122,7 @@ class PointEnv(gym.Env):
     self._height = height
     self._width = width
     self._action_noise = 0.01
-    self._fixed_start_end = fixed_start_end
+    self._fixed_task = fixed_task
     self.action_space = gym.spaces.Box(
         low=np.array([-1.0, -1.0]),
         high=np.array([1.0, 1.0]),
@@ -155,10 +155,10 @@ class PointEnv(gym.Env):
   def reset(self):
     self._timestep = 0
     
-    if self._fixed_start_end is not None:
+    if self._fixed_task is not None:
         # fix the starting and ending position of the agent
-        self.state = self._fixed_start_end[0]
-        self.goal = self._fixed_start_end[1]
+        self.state = self._fixed_task[0]
+        self.goal = self._fixed_task[1]
     else:
         self.goal = self._sample_empty_state()
         self.state = self._sample_empty_state()

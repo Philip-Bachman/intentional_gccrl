@@ -16,6 +16,8 @@
 
 import operator
 import time
+import collections
+import tree
 from typing import List, Optional, Sequence
 
 from acme import core
@@ -27,7 +29,11 @@ from acme.utils import signals
 import dm_env
 from dm_env import specs
 import numpy as np
-import tree
+import jax
+
+
+def _generate_zeros_from_spec(spec: specs.Array) -> np.ndarray:
+  return np.zeros(spec.shape, spec.dtype)
 
 
 class FancyEnvironmentLoop(core.Worker):
@@ -63,6 +69,8 @@ class FancyEnvironmentLoop(core.Worker):
       should_update: bool = True,
       label: str = 'environment_loop',
       observers: Sequence[observers_lib.EnvLoopObserver] = (),
+      fixed_goal: Optional[bool] = True,
+      rb_iterator: Optional[collections.abc.Iterable] = None
   ):
     # Internalize agent and environment.
     self._environment = environment
@@ -75,7 +83,7 @@ class FancyEnvironmentLoop(core.Worker):
 
     # extra stuff for managing additional state
     self._fixed_goal = None
-    self._replay_buffer = None
+    self._rb_iterator = None
 
   def run_episode(self) -> loggers.LoggingData:
     """Run one episode.
@@ -99,6 +107,11 @@ class FancyEnvironmentLoop(core.Worker):
                                         self._environment.reward_spec())
     env_reset_start = time.time()
     timestep = self._environment.reset()
+
+    # jax.debug.print("********************")
+    # jax.debug.print("timestep: {t}", t=timestep)
+    # jax.debug.print("********************")
+    
     env_reset_duration = time.time() - env_reset_start
     # Make the first observation.
     self._actor.observe_first(timestep)
@@ -120,6 +133,12 @@ class FancyEnvironmentLoop(core.Worker):
       # Step the environment with the agent's selected action.
       env_step_start = time.time()
       timestep = self._environment.step(action)
+
+      # jax.debug.print("********************")
+      # jax.debug.print("timestep: {t}", t=timestep)
+      # jax.debug.print("********************")
+      # assert False
+
       env_step_durations.append(time.time() - env_step_start)
 
       # Have the agent and observers observe the timestep.
@@ -208,6 +227,3 @@ class FancyEnvironmentLoop(core.Worker):
 
     return step_count
 
-
-def _generate_zeros_from_spec(spec: specs.Array) -> np.ndarray:
-  return np.zeros(spec.shape, spec.dtype)

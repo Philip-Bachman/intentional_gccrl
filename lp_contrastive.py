@@ -12,11 +12,13 @@ from typing import Any, Dict
 
 from absl import app
 from absl import flags
-import contrastive
-from contrastive import utils as contrastive_utils
+
 import launchpad as lp
 import numpy as np
 import os
+
+import contrastive
+
 
 FLAGS = flags.FLAGS
 
@@ -48,13 +50,13 @@ def get_program(params):
   fix_goals = params['fix_goals']
 
   if fix_goals:
-    fixed_start_end = fixed_goal_dict[env_name]
+    fixed_goal = fixed_goal_dict[env_name]
   else:
-    fixed_start_end = None
+    fixed_goal = None
 
   environment, obs_dim, goal_dim = \
-    contrastive_utils.make_environment(env_name, config.start_index, config.end_index, seed=seed,
-                                       fixed_start_end=fixed_start_end, return_extra=True)
+    contrastive.make_environment(env_name, seed=seed, latent_dim=None,
+                                 fixed_goal=fixed_goal, return_extra=True)
 
   assert (environment.action_spec().minimum == -1).all()
   assert (environment.action_spec().maximum == 1).all()
@@ -62,19 +64,20 @@ def get_program(params):
   config.goal_dim = goal_dim
   config.max_episode_steps = getattr(environment, '_step_limit') + 1
   network_factory = functools.partial(
-      contrastive.make_networks, obs_dim=obs_dim,
+      contrastive.make_networks,
+      obs_dim=config.obs_dim,
       goal_dim=config.goal_dim,
       repr_dim=config.repr_dim,
       use_image_obs=config.use_image_obs,
       hidden_layer_sizes=config.hidden_layer_sizes)
   
   # factory for training environments (may sample goals)
-  env_factory = lambda seed: contrastive_utils.make_environment(  # pylint: disable=g-long-lambda
-      env_name, config.start_index, config.end_index, seed,
-      fixed_start_end=fixed_start_end, return_extra=False)
+  env_factory = lambda seed: contrastive.make_environment(
+      env_name, seed, latent_dim=None, fixed_goal=fixed_goal,
+      return_extra=False)
   # factory for evaluation environments (use fixed goals)
-  env_factory_fixed_goals = lambda seed: contrastive_utils.make_environment(  # pylint: disable=g-long-lambda
-      env_name, config.start_index, config.end_index, seed, fixed_start_end=fixed_goal_dict[env_name],
+  env_factory_fixed_goals = lambda seed: contrastive.make_environment(
+      env_name, seed, latent_dim=None, fixed_goal=fixed_goal_dict[env_name],
       return_extra=False)
     
   agent = contrastive.ContrastiveDistributedLayout(

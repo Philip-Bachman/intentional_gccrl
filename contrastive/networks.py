@@ -46,7 +46,9 @@ def make_mlp(
     hidden_layer_sizes,
     out_size=None,
     out_layer=None,
-    use_ln=True):
+    use_ln=True,
+    cold_init=True
+):
   assert (out_size is None) or (out_layer is None)         # this is just a simple function :-(
   assert not ((out_size is None) and (out_layer is None))  # this is just a simple function :-(
   # make mlp with given hidden layer sizes and output size,
@@ -58,7 +60,11 @@ def make_mlp(
     is_final = is_final + [True]
   layer_list = []
   for lsz, isf in zip(layer_sizes, is_final):
-    layer_list.append(hk.Linear(lsz, w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform')))
+    # add a linear layer, with possible "cold init" for final layer
+    if isf and cold_init and (out_layer is None):
+      layer_list.append(hk.Linear(lsz, w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform')))
+    else:
+      layer_list.append(hk.Linear(lsz, w_init=hk.initializers.VarianceScaling(1e-1, 'fan_avg', 'uniform')))
     if not isf:
       # maybe add layernorm after all non-final linear layers
       if use_ln:
@@ -82,7 +88,7 @@ def make_networks(
   """Creates networks used by the agent."""
 
   num_dimensions = np.prod(spec.actions.shape, dtype=int)
-  TORSO = networks_lib.AtariTorso  # pylint: disable=invalid-name
+  TORSO = networks_lib.AtariTorso
 
   def _unflatten_obs(obs_packed):
     state = jnp.reshape(obs_packed[:, :obs_dim], (-1, 64, 64, 3)) / 255.0
@@ -107,11 +113,13 @@ def make_networks(
     intent = 0. * intent
 
     # encoder for (state, action, intent)
-    sai_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim, out_layer=None, use_ln=True)
+    sai_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
+                           out_layer=None, use_ln=True, cold_init=True)
     sai_repr = sai_encoder(jnp.concatenate([state, action, intent], axis=-1))
 
     # encoder for goals (assume same format/type as state and intent)
-    g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim, out_layer=None, use_ln=True)
+    g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
+                         out_layer=None, use_ln=True, cold_init=True)
     g_repr = g_encoder(goal)
     return sai_repr, g_repr
 

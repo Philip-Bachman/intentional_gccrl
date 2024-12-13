@@ -9,11 +9,11 @@ from acme import specs
 from acme.jax import utils
 from acme.utils import counting
 
-from contrastive import builder
-from contrastive import config as contrastive_config
-from contrastive import distributed_layout
-from contrastive import networks
-from contrastive import utils as contrastive_utils
+import contrastive.builder as builder
+import contrastive.config as contrastive_config
+import contrastive.distributed_layout as distributed_layout
+import contrastive.networks as networks
+import contrastive.utils as contrastive_utils
 from contrastive.environment_loop import FancyEnvironmentLoop
 
 from default import make_default_logger
@@ -132,8 +132,7 @@ class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
         contrastive_utils.SuccessObserver(),
         contrastive_utils.DistanceObserver(
             obs_dim=config.obs_dim,
-            start_index=config.start_index,
-            end_index=config.end_index)
+            goal_dim=config.obs_dim)
     ]
     evaluator_factories = [
         default_evaluator_factory(
@@ -152,8 +151,7 @@ class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
     actor_observers = [
         contrastive_utils.SuccessObserver(),
         contrastive_utils.DistanceObserver(obs_dim=config.obs_dim,
-                                           start_index=config.start_index,
-                                           end_index=config.end_index)]
+                                           goal_dim=config.obs_dim)]
     actor_logger_dir = config.log_dir + config.alg_name + '_' + config.env_name + '_' + str(seed)
     actor_logger_fn = get_actor_logger_fn(log_every,
                                           save_dir=actor_logger_dir,
@@ -162,10 +160,8 @@ class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
     super().__init__(
         seed=seed,
         environment_factory=environment_factory,
-        environment_factory_fixed_goals=environment_factory_fixed_goals,
         network_factory=network_factory,
         builder=contrastive_builder,
-        policy_network=networks.apply_policy_and_sample,
         evaluator_factories=evaluator_factories,
         num_actors=num_actors,
         max_number_of_steps=max_number_of_steps,

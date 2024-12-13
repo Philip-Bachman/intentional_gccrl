@@ -2,19 +2,21 @@
 import time
 from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Tuple, Callable
 
-import acme
-from acme import types
-from acme.jax import networks as networks_lib
-from acme.jax import utils
-from acme.utils import counting
-from contrastive import config as contrastive_config
-from contrastive import networks as contrastive_networks
 import jax
 import jax.numpy as jnp
 import optax
 from jax.scipy.special import logsumexp
 import numpy as np
 from jax import random
+
+import acme
+from acme import types
+from acme.jax import networks as networks_lib
+from acme.jax import utils
+from acme.utils import counting
+
+import contrastive.config as contrastive_config
+import contrastive.networks as contrastive_networks
 
 
 class TrainingState(NamedTuple):
@@ -80,7 +82,7 @@ class ContrastiveLearner(acme.Learner):
       # baselines to making a single network that returns all the values. This
       # avoids computing some of the underlying representations multiple times.
 
-      I = jnp.eye(batch_size)  # pylint: disable=invalid-name
+      I = jnp.eye(batch_size)
 
       state = transitions.extras['state_current']
       goal = transitions.extras['state_future']
@@ -91,7 +93,7 @@ class ContrastiveLearner(acme.Learner):
       # TODO:  deal with conditioning on policy goal/intent
       logits, _, _ = networks.q_network.apply(q_params, obs_packed, action, goal)
 
-      def loss_fn(_logits):  # pylint: disable=invalid-name
+      def loss_fn(_logits):
         loss_nce = optax.softmax_cross_entropy(logits=_logits, labels=I)
         loss_reg = jax.nn.logsumexp(_logits, axis=1)**2
         return loss_nce + 0.01 * loss_reg
@@ -241,7 +243,8 @@ class ContrastiveLearner(acme.Learner):
           target_policy_params=policy_params,
           q_params=q_params,
           target_q_params=q_params,
-          key=key)
+          key=key
+      )
       return state
 
     # Create initial state.
