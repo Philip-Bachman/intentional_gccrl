@@ -55,10 +55,22 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
       dataset,
       counter=None
   ):
+    # add a simple linear warmup to avoid "slamming" actor actions into
+    # the saturated, no-grad regime of the tanh-y output distribution
+    wups = 2000
+    warmup_fn = optax.linear_schedule(
+      init_value=1e-6,
+      end_value=self._config.learning_rate,
+      transition_steps=wups
+    )
+    constant_fn = optax.constant_schedule(
+      value=self._config.learning_rate
+    )
+    warmup_schedule = optax.join_schedules([warmup_fn, constant_fn], boundaries=[wups])
+
     # Create optimizers
-    policy_optimizer = optax.adam(
-        learning_rate=self._config.actor_learning_rate, eps=1e-5)
-    q_optimizer = optax.adam(learning_rate=self._config.learning_rate, eps=1e-5)
+    policy_optimizer = optax.adam(learning_rate=warmup_schedule, eps=1e-5)
+    q_optimizer = optax.adam(learning_rate=warmup_schedule, eps=1e-5)
     return contrastive_learning.ContrastiveLearner(
         networks=networks,
         rng=random_key,
@@ -126,26 +138,28 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
     @tf.function
     def flatten_fn(sample):
       seq_len = tf.shape(sample.data.observation)[0]
+
+      # sample future step indices for each step in the episode, with the
+      # temporal offset distributed according to a discount factor
       arange = tf.range(seq_len)
       is_future_mask = tf.cast(arange[:, None] < arange[None], tf.float32)
       discount = self._config.discount ** tf.cast(arange[None] - arange[:, None], tf.float32)
       probs = is_future_mask * discount
-      # The indexing changes the shape from [seq_len, 1] to [seq_len]
       future_index = tf.random.categorical(logits=tf.math.log(probs),
-                                         num_samples=1)[:, 0]
+                                           num_samples=1)[:, 0]
+      
+      # get arrays that match states with their next states
       state = sample.data.observation[:-1, :self._config.obs_dim]
       next_state = sample.data.observation[1:, :self._config.obs_dim]
 
-      # goal that was conditioned on during each episode...
+      # grab the goal that was conditioned on in this episode
+      # -- goal should be constant through an episode
       eps_intent = sample.data.observation[:-1, self._config.obs_dim:]
 
-      # Create the goal observations in three steps.
-      # 1. Take all future states (not future goals).
-      # 2. Apply obs_to_goal.
-      # 3. Sample one of the future states. Note that we don't look for a goal
-      # for the final state, because there are no future states.
+      # grab states from the "discounted future" of each state
       future_state = sample.data.observation[:, :self._config.obs_dim]
       future_state = tf.gather(future_state, future_index[:-1])
+      # make "packed" observations like the environment provides
       new_obs = tf.concat([state, future_state], axis=1)
       new_next_obs = tf.concat([next_state, future_state], axis=1)
       
@@ -160,7 +174,8 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
               'state_future': future_state,
               'episode_intent': eps_intent
           })
-      # Shift for the transpose_shuffle.
+      # reorder the batch so it's not always in "temporal" order
+      # -- not clear where this has an effect downstream?
       shift = tf.random.uniform((), 0, seq_len, tf.int32)
       transition = tree.map_structure(lambda t: tf.roll(t, shift, axis=0),
                                       transition)
@@ -171,6 +186,7 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
     else:
       num_parallel_calls = tf.data.AUTOTUNE
 
+    # weird deepmind stuff -- edit with caution....
     def _make_dataset(unused_idx):
       dataset = reverb.TrajectoryDataset.from_table_signature(
           server_address=replay_client.server_address,

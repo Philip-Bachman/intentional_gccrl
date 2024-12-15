@@ -19,6 +19,14 @@ import contrastive.config as contrastive_config
 import contrastive.networks as contrastive_networks
 
 
+def global_grad_norm(grads):
+    # Extract all leaves (arrays) from the gradient pytree
+    leaves, _ = jax.tree_util.tree_flatten(grads)
+    # Sum of squares of all elements in all leaves
+    sum_of_squares = sum([jnp.sum(jnp.square(g)) for g in leaves])
+    return jnp.sqrt(sum_of_squares)
+
+
 class TrainingState(NamedTuple):
   """Contains training state for the learner."""
   policy_optimizer_state: optax.OptState
@@ -84,13 +92,17 @@ class ContrastiveLearner(acme.Learner):
 
       I = jnp.eye(batch_size)
 
+      # each (state, goal, intent) tuple correspond to a:
+      # 1. state s
+      # 2. state s' from the discounted future of s
+      # 3. the goal/intent that the policy was following in the relevant episode
       state = transitions.extras['state_current']
       goal = transitions.extras['state_future']
       intent = transitions.extras['episode_intent']
       action = transitions.action
       obs_packed = jnp.concatenate([state, intent], axis=1)
       
-      # TODO:  deal with conditioning on policy goal/intent
+      # compute logits for use in infonce loss
       logits, _, _ = networks.q_network.apply(q_params, obs_packed, action, goal)
 
       def loss_fn(_logits):
@@ -113,11 +125,11 @@ class ContrastiveLearner(acme.Learner):
           'logits_neg': logits_neg,
           'logsumexp': logsumexp.mean(),
       }
-
       return loss, metrics
 
     def actor_loss(
         policy_params,
+        target_policy_params,
         q_params,
         alpha,
         transitions,
@@ -143,24 +155,16 @@ class ContrastiveLearner(acme.Learner):
         train_state = state
         train_goal = jnp.roll(goal, 1, axis=0)
 
-      # TEMP -- train also on true goal
-      train_state = jnp.concatenate([train_state, state], axis=0)
-      train_goal = jnp.concatenate([train_goal, intent], axis=0)
-
       obs_packed = jnp.concatenate([train_state, train_goal], axis=1)
       dist_params = networks.policy_network.apply(policy_params, obs_packed)
       action = networks.sample(dist_params, key)
       log_prob = networks.log_prob(dist_params, action)
 
-      # TODO:  deal with conditioning on policy goal/intent
+      # compute loss for optimizing goal-conditioned actor
       q_action, _, _ = networks.q_network.apply(q_params, obs_packed, action, train_goal)
 
-      # ...
-      batch_size = q_action.shape[0]
-      I = jnp.eye(batch_size)
-
-      actor_loss = jnp.diag(optax.softmax_cross_entropy(logits=q_action, labels=I))
-      # actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
+      # actor_loss = jnp.diag(optax.softmax_cross_entropy(logits=q_action, labels=I))
+      actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
 
       # action entropy loss
       approx_entropy = -log_prob
@@ -168,15 +172,13 @@ class ContrastiveLearner(acme.Learner):
       if config.use_action_entropy:
         actor_loss -= alpha * approx_entropy # negative -(-log prob): maximize entropy
 
-      # rescale parts of the loss
-      n_batch = state.shape[0]
-      actor_loss = jnp.mean(actor_loss[:(2 * n_batch)]) + 0.01 * jnp.mean(actor_loss[(2 * n_batch):])
+      actor_loss = jnp.mean(actor_loss)
 
       metrics = {
           'entropy_mean': jnp.mean(approx_entropy),
       }
 
-      return jnp.mean(actor_loss), metrics
+      return actor_loss, metrics
 
     # compute gradients for actor and critic
     critic_grad = jax.value_and_grad(critic_loss, has_aux=True)
@@ -189,34 +191,54 @@ class ContrastiveLearner(acme.Learner):
       key, key_alpha, key_critic, key_actor = jax.random.split(state.key, 4)
       alpha = config.entropy_coefficient
 
-      # compute loss and grads for critic
+      ##################################################
+      # Compute loss and gradient for critic and actor #
+      ##################################################
       (critic_loss, critic_metrics), critic_grads = critic_grad(
           state.q_params, state.policy_params, state.target_q_params,
           transitions, key_critic)
       metrics = critic_metrics
-
-      # compute loss and grads for actor                
-      (actor_loss, actor_metrics), actor_grads = actor_grad(state.policy_params, state.q_params, 
-                                                            alpha, transitions, key_actor)
+      # ...
+      (actor_loss, actor_metrics), actor_grads = actor_grad(
+        state.policy_params, state.target_policy_params, state.q_params, 
+        alpha, transitions, key_actor)
       metrics.update(actor_metrics)
 
-      # update critic
-      critic_update, q_optimizer_state = q_optimizer.update(critic_grads, state.q_optimizer_state)
+      #####################################
+      # Apply updates to critic and actor #
+      #####################################
+      clip_critic_norm = optax.clip_by_global_norm(10.0)
+      critic_grads_clipped, q_optimizer_state = clip_critic_norm.update(
+        critic_grads, state.q_optimizer_state
+      )
+      critic_update, q_optimizer_state = q_optimizer.update(
+        critic_grads_clipped, q_optimizer_state
+      )
       q_params = optax.apply_updates(state.q_params, critic_update)
       new_target_q_params = jax.tree_map(lambda x, y: x * (1 - config.tau) + y * config.tau, 
                                          state.target_q_params, q_params)
-      
-      # update actor
+      # ...
+      clip_actor_norm = optax.clip_by_global_norm(1.0)
+      actor_grads_clipped, policy_optimizer_state = clip_actor_norm.update(
+        actor_grads, state.policy_optimizer_state
+      )
       actor_update, policy_optimizer_state = policy_optimizer.update(
-          actor_grads, state.policy_optimizer_state)
+          actor_grads_clipped, policy_optimizer_state
+      )
       policy_params = optax.apply_updates(state.policy_params, actor_update)
       new_target_policy_params = jax.tree_map(lambda x, y: x * (1 - config.tau) + y * config.tau, 
                                               state.target_policy_params, policy_params)
+      
+      # get gradient norms for tracking/metrics
+      grad_norm_actor = global_grad_norm(actor_grads)
+      grad_norm_critic = global_grad_norm(critic_grads)
 
       # add actor and critic losses to metrics                        
       metrics.update({
           'critic_loss': critic_loss,
           'actor_loss': actor_loss,
+          'grad_norm_critic': grad_norm_critic,
+          'grad_norm_actor': grad_norm_actor
       })
       
       # update training state

@@ -99,7 +99,6 @@ def make_networks(
     # obs_packed: should contain current state and intent policy conditions on
     # action: should contain action
     # goal: state we want to predict in the future
-    #
     if use_image_obs:
       state, intent = _unflatten_obs(obs_packed)
       img_encoder = TORSO()
@@ -110,7 +109,7 @@ def make_networks(
       state = obs_packed[:, :obs_dim]
       intent = obs_packed[:, obs_dim:]
     # TODO:  deal with conditioning on policy goal/intent
-    intent = 0. * intent
+    intent = 1. * intent
 
     # encoder for (state, action, intent)
     sai_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,

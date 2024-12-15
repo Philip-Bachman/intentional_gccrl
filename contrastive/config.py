@@ -11,7 +11,7 @@ import numpy as onp
 class ContrastiveConfig:
   """Configuration options for contrastive RL."""
   add_uid: bool = True
-  time_delta_minutes: int = 5
+  time_delta_minutes: int = 100000
   log_dir: str = 'logs/'
   env_name: str = ''
   alg_name: str = ''
@@ -24,14 +24,13 @@ class ContrastiveConfig:
     
   # Loss options
   batch_size: int = 256
-  actor_learning_rate: float = 3e-4
   learning_rate: float = 3e-4
   reward_scale: float = 1
   discount: float = 0.99
   n_step: int = 1
   # Target smoothing coefficient.
   tau: float = 0.005
-  hidden_layer_sizes: Tuple[int, Ellipsis] = (256, 256)
+  hidden_layer_sizes: Tuple[int, Ellipsis] = (1024, 1024, 1024, 1024)
   
   # Loss options - entropy
   # Coefficient applied to the entropy bonus. If None, an adaptative

@@ -102,7 +102,7 @@ class NormalTanhDistribution(hk.Module):
                num_dimensions: int,
                min_scale: float = 1e-3,
                w_init: hk_init.Initializer = hk_init.VarianceScaling(
-                   1.0, 'fan_in', 'uniform'),
+                   0.1, 'fan_in', 'uniform'),
                b_init: hk_init.Initializer = hk_init.Constant(0.),
                rescale: float = 1.0):
     """Initialization.

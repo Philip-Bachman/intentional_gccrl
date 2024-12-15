@@ -87,13 +87,13 @@ def default_evaluator_factory(
     counter = counting.Counter(counter, 'evaluator')
     logger = make_default_logger('evaluator', save_data=True, save_dir=save_dir,
                                  add_uid=add_uid, steps_key='actor_steps',
-                                 use_term=False)
+                                 use_term=False, use_tboard=True)
 
     # Create the run loop and return it.
     return FancyEnvironmentLoop(environment, actor, counter,
-                                logger, observers=observers)
+                                logger, observers=observers,
+                                use_env_goal=True)
   return evaluator
-
 
 
 class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
@@ -108,7 +108,7 @@ class ContrastiveDistributedLayout(distributed_layout.DistributedLayout):
       seed,
       num_actors,
       max_number_of_steps = None,
-      log_every = 10.0
+      log_every = 20.0
   ):
     # Check that the environment-specific parts of the config have been set.
     assert config.max_episode_steps > 0

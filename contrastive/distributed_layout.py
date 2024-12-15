@@ -133,9 +133,6 @@ class DistributedLayout:
   ):
     """Actor process for interacting wth environment and collecting data."""
     rb_adder = self._builder.make_adder(replay)
-    rb_iterator = self._builder.make_dataset_iterator(
-      replay, self._prefetch_size, self._device_prefetch
-    )
 
     environment_key, actor_key = jax.random.split(random_key)
 
@@ -155,8 +152,8 @@ class DistributedLayout:
     # Create the loop to connect environment and agent.
     return FancyEnvironmentLoop(environment, actor, counter,
                                 logger, observers=self._actor_observers,
-                                rb_iterator=rb_iterator,
-                                rb_warmup=10)
+                                use_env_goal=False,
+                                rb_warmup=100)
 
   def coordinator(
       self,

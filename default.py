@@ -74,5 +74,4 @@ def make_default_logger(
   if asynchronous:
     logger = async_logger.AsyncLogger(logger)
   logger = filters.TimeFilter(logger, time_delta)
-
   return logger

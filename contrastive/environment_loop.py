@@ -18,6 +18,7 @@ import operator
 import time
 import collections
 import tree
+from random import sample
 from typing import List, Optional, Sequence
 
 from acme import core
@@ -35,6 +36,26 @@ import jax
 
 def _generate_zeros_from_spec(spec: specs.Array) -> np.ndarray:
   return np.zeros(spec.shape, spec.dtype)
+
+
+class SimpleReplayBuffer:
+  def __init__(self, max_size):
+    self.buffer = [None] * max_size
+    self.max_size = max_size
+    self.index = 0
+    self.size = 0
+
+  def __len__(self):
+    return self.size
+
+  def append(self, obj):
+    self.buffer[self.index] = obj
+    self.size = min(self.size + 1, self.max_size)
+    self.index = (self.index + 1) % self.max_size
+
+  def sample(self, batch_size):
+    indices = sample(range(self.size), batch_size)
+    return [self.buffer[index] for index in indices]
 
 
 class FancyEnvironmentLoop(core.Worker):
@@ -70,8 +91,7 @@ class FancyEnvironmentLoop(core.Worker):
       should_update: bool = True,
       label: str = 'environment_loop',
       observers: Sequence[observers_lib.EnvLoopObserver] = (),
-      fixed_goal: Optional[bool] = True,
-      rb_iterator: Optional[collections.abc.Iterable] = None,
+      use_env_goal: Optional[bool] = True,
       rb_warmup: Optional[int] = 100
   ):
     # check for some additional env features that we want...
@@ -88,19 +108,23 @@ class FancyEnvironmentLoop(core.Worker):
     self._observers = observers
 
     # extra stuff for managing additional state
-    self._fixed_goal = fixed_goal
-    self._rb_iterator = rb_iterator
+    self._use_env_goal = use_env_goal
     self._rb_warmup = rb_warmup
-    self._random_goal = None
     self._obs_dim = environment.obs_dim
     self._goal_dim = environment.goal_dim
-    self._episodes = 0
+    self._goal_buffer = SimpleReplayBuffer(10000)
+
+  def _get_goal(self, timestep):
+    """Pull the goal from the given timestep's observation.
+    """
+    goal = timestep.observation[self._obs_dim:(self._obs_dim + self._goal_dim)].copy()
+    return goal
 
   def _set_goal(self, timestep, new_goal=None):
     """Bypass the environment's goal and force a new goal.
     """
     if new_goal is not None:
-      pass
+      timestep.observation[self._obs_dim:(self._obs_dim + self._goal_dim)] = new_goal
     return timestep
 
   def run_episode(self) -> loggers.LoggingData:
@@ -118,20 +142,8 @@ class FancyEnvironmentLoop(core.Worker):
     select_action_durations: List[float] = []
     env_step_durations: List[float] = []
     episode_steps: int = 0
-    episode_rb_goal = None
-
-    if (self._rb_warmup < 0) and (self._rb_iterator is not None):
-      # sample a "viable" goal from the replay buffer
-      # -- could also sample from environment, but idk
-      jax.debug.print("********************")
-      jax.debug.print("DEEPMIND SHIT-FUCKERY")
-      jax.debug.print("type(self._rb_iterator: {t})", t=type(self._rb_iterator))
-      jax.debug.print("********************")
-      sample = next(self._rb_iterator)
-      if sample is not None:
-        transitions = types.Transition(*sample.data)
-        future_states = transitions.extras['state_future']
-        episode_rb_goal = future_states[0, self._obs_dim:(self._obs_dim + self._goal_dim)]
+    episode_env_goal = None
+    episode_rnd_goal = None
 
     # For evaluation, this keeps track of the total undiscounted reward
     # accumulated during the episode.
@@ -139,16 +151,15 @@ class FancyEnvironmentLoop(core.Worker):
                                         self._environment.reward_spec())
     env_reset_start = time.time()
     timestep = self._environment.reset()
-    timestep = self._set_goal(timestep, episode_rb_goal)
 
-    if episode_rb_goal is not None:
-      jax.debug.print("********************")
-      jax.debug.print("timestep: {t}", t=timestep)
-      jax.debug.print("type(timestep.observation): {t}", t=type(timestep.observation))
-      jax.debug.print("type(episode_rb_goal): {t}", t=type(episode_rb_goal))
-      jax.debug.print("********************")
-      assert False
-    
+    episode_env_goal = self._get_goal(timestep)
+    if (len(self._goal_buffer) > self._rb_warmup):
+      # apply additional heuristics to decide whether to sample a goal
+      # from the local buffer of "viable" goals
+      if (not self._use_env_goal) and (np.random.rand() < 0.5):
+        episode_rnd_goal = self._goal_buffer.sample(1)[0]
+        timestep = self._set_goal(timestep, episode_rnd_goal)
+
     env_reset_duration = time.time() - env_reset_start
     # Make the first observation.
     self._actor.observe_first(timestep)
@@ -170,7 +181,12 @@ class FancyEnvironmentLoop(core.Worker):
       # Step the environment with the agent's selected action.
       env_step_start = time.time()
       timestep = self._environment.step(action)
-      timestep = self._set_goal(timestep, episode_rb_goal)
+      if (np.random.rand() < 0.01):
+        # add a "viable" goal to the local goal buffer
+        # -- for now, we treat visited states as viable goals
+        self._goal_buffer.append(timestep.observation[:self._obs_dim])
+      if episode_rnd_goal is not None:
+        timestep = self._set_goal(timestep, episode_rnd_goal)
 
       env_step_durations.append(time.time() - env_step_start)
 
@@ -196,10 +212,6 @@ class FancyEnvironmentLoop(core.Worker):
 
     # Record counts.
     counts = self._counter.increment(episodes=1, steps=episode_steps)
-    self._episodes += 1
-    if self._episodes > self._rb_warmup:
-      # dumb way of flagging that we can start sampling from replay buffer
-      self._rb_warmup = -1
 
     # Collect the results and combine with counts.
     steps_per_second = episode_steps / (time.time() - episode_start_time)
