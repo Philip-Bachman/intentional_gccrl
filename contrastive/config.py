@@ -20,7 +20,9 @@ class ContrastiveConfig:
   num_actors: int = 4
 
   # env options
-  fix_goals: bool = False
+  # use_env_goal : whether to use the fixed env goal during training rollouts
+  #                note - the fixed env goal is always used in evaluators
+  use_env_goal: bool = True
     
   # Loss options
   batch_size: int = 256
@@ -60,6 +62,8 @@ class ContrastiveConfig:
   use_td: bool = False
   twin_q: bool = False
   use_image_obs: bool = False
+  use_policy_goal_critic: bool = False
+  use_policy_goal_actor: bool = False
   random_goals: int = 1  # switch for how to sample actor training goals
   jit: bool = True
   add_mc_to_td: bool = False

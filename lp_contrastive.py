@@ -47,16 +47,11 @@ def get_program(params):
 
   config = contrastive.ContrastiveConfig(**params)
   
-  fix_goals = params['fix_goals']
-
-  if fix_goals:
-    fixed_goal = fixed_goal_dict[env_name]
-  else:
-    fixed_goal = None
+  env_goal = fixed_goal_dict[env_name]
 
   dummy_env = \
     contrastive.make_environment(env_name, seed=seed, latent_dim=None,
-                                 fixed_goal=fixed_goal)
+                                 fixed_goal=env_goal)
 
   assert (dummy_env.action_spec().minimum == -1).all()
   assert (dummy_env.action_spec().maximum == 1).all()
@@ -66,17 +61,18 @@ def get_program(params):
   network_factory = functools.partial(
       contrastive.make_networks,
       obs_dim=config.obs_dim,
-      goal_dim=config.goal_dim,
       repr_dim=config.repr_dim,
       use_image_obs=config.use_image_obs,
-      hidden_layer_sizes=config.hidden_layer_sizes)
+      hidden_layer_sizes=config.hidden_layer_sizes,
+      use_policy_goal_critic=config.use_policy_goal_critic,
+      use_policy_goal_actor=config.use_policy_goal_actor)
   
   # factory for training environments (may sample goals)
   environment_factory = lambda seed: contrastive.make_environment(
-      env_name, seed, latent_dim=None, fixed_goal=fixed_goal)
+      env_name, seed, latent_dim=None, fixed_goal=env_goal)
   # factory for evaluation environments (use fixed goals)
   environment_factory_fixed_goals = lambda seed: contrastive.make_environment(
-      env_name, seed, latent_dim=None, fixed_goal=fixed_goal_dict[env_name])
+      env_name, seed, latent_dim=None, fixed_goal=env_goal)
     
   agent = contrastive.ContrastiveDistributedLayout(
       seed=seed,
@@ -117,7 +113,6 @@ def main(_):
   alg = FLAGS.alg
   print('Using alg {}...'.format(alg))
   params['alg_name'] = alg
-  params['fix_goals'] = not FLAGS.sample_goals
   add_uid = FLAGS.add_uid
   params['add_uid'] = add_uid
   print('Adding uid: {}...'.format(params['add_uid']))

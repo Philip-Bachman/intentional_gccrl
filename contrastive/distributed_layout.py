@@ -74,11 +74,6 @@ class DistributedLayout:
     dummy_seed = 1
     self._dummy_environment_spec = \
       specs.make_environment_spec(environment_factory(dummy_seed))
-    print('********************************************')
-    print('********************************************')
-    print('self._dummy_environment_spec: {}'.format(self._dummy_environment_spec))
-    print('********************************************')
-    print('********************************************')
 
   def replay(self):
     """The replay storage."""
@@ -152,7 +147,7 @@ class DistributedLayout:
     # Create the loop to connect environment and agent.
     return FancyEnvironmentLoop(environment, actor, counter,
                                 logger, observers=self._actor_observers,
-                                use_env_goal=False,
+                                use_env_goal=self._config.use_env_goal,
                                 rb_warmup=100)
 
   def coordinator(

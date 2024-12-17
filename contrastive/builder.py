@@ -57,9 +57,9 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
   ):
     # add a simple linear warmup to avoid "slamming" actor actions into
     # the saturated, no-grad regime of the tanh-y output distribution
-    wups = 2000
+    wups = 5000
     warmup_fn = optax.linear_schedule(
-      init_value=1e-6,
+      init_value=0.0,
       end_value=self._config.learning_rate,
       transition_steps=wups
     )
@@ -154,7 +154,7 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
 
       # grab the goal that was conditioned on in this episode
       # -- goal should be constant through an episode
-      eps_intent = sample.data.observation[:-1, self._config.obs_dim:]
+      policy_goal = sample.data.observation[:-1, self._config.obs_dim:]
 
       # grab states from the "discounted future" of each state
       future_state = sample.data.observation[:, :self._config.obs_dim]
@@ -172,7 +172,7 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
           extras={
               'state_current': state,
               'state_future': future_state,
-              'episode_intent': eps_intent
+              'policy_goal': policy_goal
           })
       # reorder the batch so it's not always in "temporal" order
       # -- not clear where this has an effect downstream?

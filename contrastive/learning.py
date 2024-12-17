@@ -92,18 +92,15 @@ class ContrastiveLearner(acme.Learner):
 
       I = jnp.eye(batch_size)
 
-      # each (state, goal, intent) tuple correspond to a:
-      # 1. state s
-      # 2. state s' from the discounted future of s
-      # 3. the goal/intent that the policy was following in the relevant episode
-      state = transitions.extras['state_current']
-      goal = transitions.extras['state_future']
-      intent = transitions.extras['episode_intent']
+      # each (state, policy goal, perturbation goal) tuple corresponds to:
+      state = transitions.extras['state_current']     # current state
+      pert_goal = transitions.extras['state_future']  # state we want to perturb to
+      policy_goal = transitions.extras['policy_goal']     # state policy wants to reach
       action = transitions.action
-      obs_packed = jnp.concatenate([state, intent], axis=1)
+      obs_packed = jnp.concatenate([state, policy_goal], axis=1)
       
       # compute logits for use in infonce loss
-      logits, _, _ = networks.q_network.apply(q_params, obs_packed, action, goal)
+      logits, _, _ = networks.q_network.apply(q_params, obs_packed, action, pert_goal)
 
       def loss_fn(_logits):
         loss_nce = optax.softmax_cross_entropy(logits=_logits, labels=I)
@@ -136,32 +133,39 @@ class ContrastiveLearner(acme.Learner):
         key,
       ):
 
-      # actor wants to maximize likelihood of achieving its intent!
-      # -- ie, goal and intent are the same
+      # state     : current state
+      # pert_goal : discounted future state
+      # policy_goal : goal of policy that produced this (state, future state) pair
       state = transitions.extras['state_current']
-      goal = transitions.extras['state_future']
-      intent = transitions.extras['episode_intent']
+      pert_goal = transitions.extras['state_future']
+      policy_goal = transitions.extras['policy_goal']
+      shuff_pert_goal = jnp.roll(pert_goal, 1, axis=0)
 
       if config.random_goals == 0:
         # train actor only on intra-episode future states
         train_state = state
-        train_goal = goal
+        train_pert_goal = pert_goal
+        train_policy_goal = policy_goal
       elif config.random_goals == 1:
         # train actor 50/50 on intra-episode future states and random states
         train_state = jnp.concatenate([state, state], axis=0)
-        train_goal = jnp.concatenate([goal, jnp.roll(goal, 1, axis=0)], axis=0)
+        train_pert_goal = jnp.concatenate([pert_goal, shuff_pert_goal], axis=0)
+        train_policy_goal = jnp.concatenate([policy_goal, policy_goal], axis=0)
       elif config.random_goals == 2:
         # train actor only on random states
         train_state = state
-        train_goal = jnp.roll(goal, 1, axis=0)
+        train_pert_goal = shuff_pert_goal
+        train_policy_goal = policy_goal
 
-      obs_packed = jnp.concatenate([train_state, train_goal], axis=1)
-      dist_params = networks.policy_network.apply(policy_params, obs_packed)
+      obs_packed = jnp.concatenate([train_state, train_policy_goal], axis=-1)
+      dist_params = networks.policy_network.apply(
+        policy_params, jnp.concatenate([obs_packed, train_pert_goal], axis=-1))
       action = networks.sample(dist_params, key)
       log_prob = networks.log_prob(dist_params, action)
 
       # compute loss for optimizing goal-conditioned actor
-      q_action, _, _ = networks.q_network.apply(q_params, obs_packed, action, train_goal)
+      q_action, _, _ = networks.q_network.apply(
+        q_params, obs_packed, action, train_pert_goal)
 
       # actor_loss = jnp.diag(optax.softmax_cross_entropy(logits=q_action, labels=I))
       actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
