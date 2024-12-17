@@ -118,9 +118,11 @@ class NormalTanhDistribution(hk.Module):
     self._loc_layer = hk.Linear(num_dimensions, w_init=w_init, b_init=b_init)
     self._scale_layer = hk.Linear(num_dimensions, w_init=w_init, b_init=b_init)
     self._rescale = tfp.bijectors.Scale(scale=rescale)
+    self._pre_tanh_activations = None
 
   def __call__(self, inputs: jnp.ndarray) -> tfd.Distribution:
-    loc = 10. * jax.lax.tanh(self._loc_layer(inputs) / 10.)
+    self._pre_tanh_activations = self._loc_layer(inputs)
+    loc = 10. * jax.lax.tanh(self._pre_tanh_activations / 10.)
     scale = jax.nn.softplus(self._scale_layer(inputs)) + self._min_scale
     distribution = tfd.Normal(loc=loc, scale=scale)
     distribution = TanhTransformedDistribution(distribution)

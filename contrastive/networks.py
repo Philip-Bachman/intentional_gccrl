@@ -59,18 +59,19 @@ def make_mlp(
     layer_sizes = layer_sizes + (out_size,)
     is_final = is_final + [True]
   layer_list = []
-  for lsz, isf in zip(layer_sizes, is_final):
-    # add a linear layer, with possible "cold init" for final layer
-    if isf and cold_init and (out_layer is None):
-      layer_list.append(hk.Linear(lsz, w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform')))
+  for l_sz, is_f in zip(layer_sizes, is_final):
+    if is_f and cold_init and (out_layer is None):
+      # this should be for final layers in the critic
+      layer_list.append(hk.Linear(l_sz, w_init=hk.initializers.VarianceScaling(1e-1, 'fan_avg', 'uniform')))
     else:
-      layer_list.append(hk.Linear(lsz, w_init=hk.initializers.VarianceScaling(1e-1, 'fan_avg', 'uniform')))
-    if not isf:
-      # maybe add layernorm after all non-final linear layers
+      # this should be for hidden layers in the actor and critic
+      layer_list.append(hk.Linear(l_sz, w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform')))
+    # add normalization and non-linearity on hidden layers
+    if not is_f:
       if use_ln:
         layer_list.append(hk.LayerNorm(-1, True, True))
-      # add relu after all non-final linear layers
       layer_list.append(jax.nn.relu)
+  # add an extra output layer for the actor (probably tfd distribution)
   if out_layer is not None:
     layer_list.append(out_layer)
   mlp = hk.Sequential(layer_list)
