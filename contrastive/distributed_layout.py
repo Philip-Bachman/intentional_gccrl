@@ -2,6 +2,7 @@
 
 import dataclasses
 import logging
+import functools
 from typing import Any, Callable, Optional, Sequence
 
 import dm_env
@@ -23,8 +24,55 @@ from acme.utils import loggers
 from acme.utils import lp_utils
 
 from default import make_default_logger
+from contrastive.builder import ContrastiveBuilder
 from contrastive.environment_loop import FancyEnvironmentLoop
 from contrastive.networks import apply_policy_and_sample
+from contrastive.utils import SuccessObserver, DistanceObserver
+
+
+@dataclasses.dataclass
+class CheckpointingConfig:  
+  def __init__(
+      self,
+      save_dir = 'logs',
+      add_uid = True):
+    
+    """Configuration options for learner checkpointer."""
+    # The maximum number of checkpoints to keep.
+    self.max_to_keep: int = 10
+    # Which directory to put the checkpoint in.
+    self.directory: str = save_dir
+    # If True adds a UID to the checkpoint path, see
+    # `paths.get_unique_id()` for how this UID is generated.
+    self.add_uid: bool = add_uid
+
+
+def get_actor_logger_fn(
+    save_dir = "logs",
+    add_uid = True,
+    use_tboard = False):
+  """Creates an actor logger."""
+
+  def create_logger(actor_id):
+    return make_default_logger(
+        'actor',
+        save_data=(actor_id == 0),
+        save_dir=save_dir,
+        add_uid=add_uid,
+        steps_key='actor_steps',
+        use_tboard=use_tboard,
+        use_term=True)
+  return create_logger
+
+
+def get_observers(config):
+  observers = [
+    SuccessObserver(),
+    DistanceObserver(obs_dim=config.obs_dim,
+                     goal_dim=config.goal_dim)
+  ]
+  return observers
+
 
 
 class DistributedLayout:
@@ -33,47 +81,61 @@ class DistributedLayout:
   def __init__(
       self,
       seed,
-      environment_factory,
+      config,
+      environment_factory_train,
+      environment_factory_eval,
       network_factory,
-      builder,
       num_actors,
-      actor_logger_fn = None,
       evaluator_factories = (),
       device_prefetch = True,
       prefetch_size = 1,
       max_number_of_steps = None,
-      actor_observers = (),
-      multithreading_colocate_learner_and_reverb = False,
-      checkpointing_config = None,
-      config = None):
+      multithreading_colocate_learner_and_reverb = False):
 
     if prefetch_size < 0:
       raise ValueError(f'Prefetch size={prefetch_size} should be non negative')
-    if actor_logger_fn is None:
-      raise ValueError(f'actor_logger_fn={actor_logger_fn} should be a logger ')
+
+    save_dir = config.log_dir + config.alg_name + '_' + config.env_name + '_' + str(seed)
 
     self._seed = seed
-    self._builder = builder
-    self._environment_factory = environment_factory
+    self._environment_factory_train = environment_factory_train
+    self._environment_factory_eval = environment_factory_eval
     self._network_factory = network_factory
     self._num_actors = num_actors
     self._device_prefetch = device_prefetch
     self._prefetch_size = prefetch_size
     self._max_number_of_steps = max_number_of_steps
-    self._actor_logger_fn = actor_logger_fn
     self._evaluator_factories = evaluator_factories
-    self._actor_observers = actor_observers
+    self._actor_observers = get_observers(config)
     self._multithreading_colocate_learner_and_reverb = (
         multithreading_colocate_learner_and_reverb)
-    self._checkpointing_config = checkpointing_config
     self._config = config
+    self._checkpointing_config = \
+      CheckpointingConfig(save_dir, add_uid=config.add_uid)
     #
-    # WARNING -- we assume all environments from self._environment_factory
+    # WARNING -- we assume all environments from self._environment_factory_train
     #            have the same spec!!!
     #
     dummy_seed = 1
     self._dummy_environment_spec = \
-      specs.make_environment_spec(environment_factory(dummy_seed))
+      specs.make_environment_spec(environment_factory_train(dummy_seed))
+    
+    # ...
+    
+    logger_fn = functools.partial(make_default_logger,
+                                  'learner', save_data=True,
+                                  asynchronous=True,
+                                  serialize_fn=utils.fetch_devicearray,
+                                  save_dir=save_dir,
+                                  add_uid=config.add_uid,
+                                  steps_key='learner_steps', use_term=False,
+                                  use_tboard=True)
+    self._builder = ContrastiveBuilder(config, logger_fn=logger_fn)
+
+    # ...
+    self._actor_logger_fn = get_actor_logger_fn(save_dir=save_dir,
+                                                add_uid=config.add_uid,
+                                                use_tboard=True)
 
   def replay(self):
     """The replay storage."""
@@ -132,7 +194,7 @@ class DistributedLayout:
     environment_key, actor_key = jax.random.split(random_key)
 
     # environments normally require uint32 as a seed.
-    environment = self._environment_factory(
+    environment = self._environment_factory_train(
         utils.sample_uint32(environment_key))
 
     networks = self._network_factory(self._dummy_environment_spec)
@@ -148,6 +210,7 @@ class DistributedLayout:
     return FancyEnvironmentLoop(environment, actor, counter,
                                 logger, observers=self._actor_observers,
                                 use_env_goal=self._config.use_env_goal,
+                                update_actor_per='step',
                                 rb_warmup=100)
 
   def coordinator(
@@ -198,7 +261,7 @@ class DistributedLayout:
         evaluator_key, key = jax.random.split(key)
         program.add_node(
             lp.CourierNode(evaluator, evaluator_key, learner, counter,
-                          self._builder.make_actor))
+                           self._builder.make_actor))
 
     with program.group('actor'):
       for actor_id in range(self._num_actors):

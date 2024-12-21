@@ -167,7 +167,6 @@ class ContrastiveLearner(acme.Learner):
       q_action, _, _ = networks.q_network.apply(
         q_params, obs_packed, action, train_pert_goal)
 
-      # actor_loss = jnp.diag(optax.softmax_cross_entropy(logits=q_action, labels=I))
       actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
 
       # action entropy loss
@@ -193,7 +192,7 @@ class ContrastiveLearner(acme.Learner):
         state, transitions
     ):
       key, key_alpha, key_critic, key_actor = jax.random.split(state.key, 4)
-      alpha = config.entropy_coefficient
+      alpha = config.entropy_alpha
 
       ##################################################
       # Compute loss and gradient for critic and actor #

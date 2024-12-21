@@ -70,14 +70,14 @@ def get_program(params):
   # factory for training environments (may sample goals)
   environment_factory = lambda seed: contrastive.make_environment(
       env_name, seed, latent_dim=None, fixed_goal=env_goal)
-  # factory for evaluation environments (use fixed goals)
-  environment_factory_fixed_goals = lambda seed: contrastive.make_environment(
-      env_name, seed, latent_dim=None, fixed_goal=env_goal)
+  # # factory for evaluation environments (use fixed goals)
+  # environment_factory_fixed_goals = lambda seed: contrastive.make_environment(
+  #     env_name, seed, latent_dim=None, fixed_goal=env_goal)
     
   agent = contrastive.ContrastiveDistributedLayout(
       seed=seed,
       environment_factory_train=environment_factory,
-      environment_factory_eval=environment_factory_fixed_goals,
+      environment_factory_eval=environment_factory,
       network_factory=network_factory,
       config=config,
       num_actors=config.num_actors,
@@ -100,7 +100,7 @@ def main(_):
   params = {
       'seed': seed_idx,
       'use_random_actor': True,
-      'entropy_coefficient': 0.0,
+      'entropy_alpha': 0.0,
       'env_name': env_name,
       # the number of environment steps
       'max_number_of_steps': FLAGS.num_steps,

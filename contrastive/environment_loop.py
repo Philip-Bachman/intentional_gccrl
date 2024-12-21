@@ -62,7 +62,7 @@ class FancyEnvironmentLoop(core.Worker):
   """A less simple RL environment loop that injects additional state.
 
   This takes `Environment` and `Actor` instances and coordinates their
-  interaction. Agent is updated if `should_update=True`. This can be used as:
+  interaction. This can be used as:
 
     loop = FancyEnvironmentLoop(environment, actor)
     loop.run(num_episodes)
@@ -88,7 +88,7 @@ class FancyEnvironmentLoop(core.Worker):
       actor: core.Actor,
       counter: Optional[counting.Counter] = None,
       logger: Optional[loggers.Logger] = None,
-      should_update: bool = True,
+      update_actor_per: str = 'step',
       label: str = 'environment_loop',
       observers: Sequence[observers_lib.EnvLoopObserver] = (),
       use_env_goal: Optional[bool] = True,
@@ -97,6 +97,7 @@ class FancyEnvironmentLoop(core.Worker):
     # check for some additional env features that we want...
     assert hasattr(environment, 'obs_dim')
     assert hasattr(environment, 'goal_dim')
+    assert update_actor_per in ['step', 'episode']
     
     # Internalize agent and environment.
     self._environment = environment
@@ -104,7 +105,7 @@ class FancyEnvironmentLoop(core.Worker):
     self._counter = counter or counting.Counter()
     self._logger = logger or loggers.make_default_logger(
         label, steps_key=self._counter.get_steps_key())
-    self._should_update = should_update
+    self._update_actor_per = update_actor_per
     self._observers = observers
 
     # extra stuff for managing additional state
@@ -161,6 +162,10 @@ class FancyEnvironmentLoop(core.Worker):
         timestep = self._set_goal(timestep, episode_rnd_goal)
 
     env_reset_duration = time.time() - env_reset_start
+
+    if self._update_actor_per == 'episode':
+      self._actor.update()
+
     # Make the first observation.
     self._actor.observe_first(timestep)
     for observer in self._observers:
@@ -170,6 +175,10 @@ class FancyEnvironmentLoop(core.Worker):
 
     # Run an episode.
     while not timestep.last():
+      # Give the actor the opportunity to update itself.
+      if (((episode_steps % 1) == 0) and (self._update_actor_per == 'step')):
+          self._actor.update()
+
       # Book-keeping.
       episode_steps += 1
 
@@ -196,10 +205,6 @@ class FancyEnvironmentLoop(core.Worker):
         # One environment step was completed. Observe the current state of the
         # environment, the current timestep and the action.
         observer.observe(self._environment, timestep, action)
-
-      # Give the actor the opportunity to update itself.
-      if self._should_update:
-        self._actor.update()
 
       # Equivalent to: episode_return += timestep.reward
       # We capture the return value because if timestep.reward is a JAX

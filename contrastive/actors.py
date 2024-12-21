@@ -42,8 +42,7 @@ class GenericActor(core.Actor, Generic[actor_core.State, actor_core.Extras]):
       variable_client: Optional[variable_utils.VariableClient],
       adder: Optional[adders.Adder] = None,
       jit: bool = True,
-      backend: Optional[str] = 'cpu',
-      per_episode_update: bool = False
+      backend: Optional[str] = 'cpu'
   ):
     """Initializes a feed forward actor.
 
@@ -54,8 +53,6 @@ class GenericActor(core.Actor, Generic[actor_core.State, actor_core.Extras]):
       adder: An adder to add experiences to.
       jit: Whether or not to jit the passed ActorCore's pure functions.
       backend: Which backend to use when jitting the policy.
-      per_episode_update: if True, updates variable client params once at the
-        beginning of each episode
     """
     self._random_key = random_key
     self._variable_client = variable_client
@@ -70,7 +67,6 @@ class GenericActor(core.Actor, Generic[actor_core.State, actor_core.Extras]):
       self._init = actor.init
       self._policy = actor.select_action
     self._get_extras = actor.get_extras
-    self._per_episode_update = per_episode_update
 
   @property
   def _params(self):
@@ -85,8 +81,6 @@ class GenericActor(core.Actor, Generic[actor_core.State, actor_core.Extras]):
     self._state = self._init(key)
     if self._adder:
       self._adder.add_first(timestep)
-    if self._variable_client and self._per_episode_update:
-      self._variable_client.update_and_wait()
 
   def observe(self, action: network_lib.Action, next_timestep: dm_env.TimeStep):
     if self._adder:
@@ -94,7 +88,7 @@ class GenericActor(core.Actor, Generic[actor_core.State, actor_core.Extras]):
                       extras=self._get_extras(self._state))
 
   def update(self, wait: bool = False):
-    if self._variable_client and not self._per_episode_update:
+    if self._variable_client:
       self._variable_client.update(wait)
 
 
@@ -109,7 +103,6 @@ class ContrastiveGaussianActor(GenericActor):
       adder: Optional[adders.Adder] = None,
       jit: bool = True,
       backend: Optional[str] = 'cpu',
-      per_episode_update: bool = False,
       initially_random: bool = False
   ):
     assert (variable_client is not None)
@@ -120,8 +113,7 @@ class ContrastiveGaussianActor(GenericActor):
         variable_client=variable_client,
         adder=adder,
         jit=jit,
-        backend=backend,
-        per_episode_update=per_episode_update
+        backend=backend
     )
 
   def select_action(self,
@@ -140,19 +132,3 @@ class ContrastiveGaussianActor(GenericActor):
                                          self._state)
     return utils.to_numpy(action)
 
-  def observe_first(self, timestep: dm_env.TimeStep):
-    self._random_key, key = jax.random.split(self._random_key)
-    self._state = self._init(key)
-    if self._adder:
-      self._adder.add_first(timestep)
-    if self._variable_client and self._per_episode_update:
-      self._variable_client.update_and_wait()
-
-  def observe(self, action: network_lib.Action, next_timestep: dm_env.TimeStep):
-    if self._adder:
-      self._adder.add(action, next_timestep,
-                      extras=self._get_extras(self._state))
-
-  def update(self, wait: bool = False):
-    if self._variable_client and not self._per_episode_update:
-      self._variable_client.update(wait)

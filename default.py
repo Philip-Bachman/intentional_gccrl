@@ -18,7 +18,7 @@ def make_default_logger(
     save_data: bool = True,
     save_dir: str = 'logs',
     add_uid: bool = True,
-    time_delta: float = 1.0,
+    time_delta: float = 10.0,
     asynchronous: bool = False,
     print_fn: Optional[Callable[[str], None]] = None,
     serialize_fn: Optional[Callable[[Mapping[str, Any]], str]] = base.to_numpy,

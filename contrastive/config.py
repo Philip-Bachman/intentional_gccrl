@@ -16,7 +16,7 @@ class ContrastiveConfig:
   env_name: str = ''
   alg_name: str = ''
   seed: int = 0
-  max_number_of_steps: int = 8_000_000
+  max_number_of_steps: int = 10_000_000
   num_actors: int = 4
 
   # env options
@@ -37,9 +37,8 @@ class ContrastiveConfig:
   # Loss options - entropy
   # Coefficient applied to the entropy bonus. If None, an adaptative
   # coefficient will be used.
-  use_action_entropy: bool = True
-  entropy_coefficient: Optional[float] = None # note this is alpha
-  target_entropy: float = 0.0
+  use_action_entropy: bool = False
+  entropy_alpha: float = 0.0
 
   # Replay options
   min_replay_size: int = 10000
@@ -55,12 +54,10 @@ class ContrastiveConfig:
   
   # training options
   no_repr: bool = False
-  repr_dim: Union[int, str] = 64  # Size of representation.
-  use_random_actor: bool = True  # Initial with uniform random policy.
+  repr_dim: Union[int, str] = 64  # size of infonce representation
+  use_random_actor: bool = True   # warmup with uniform random policy
   use_cpc: bool = False
-  local: bool = False  # Whether running locally. Disables eval.
   use_td: bool = False
-  twin_q: bool = False
   use_image_obs: bool = False
   use_policy_goal_critic: bool = False
   use_policy_goal_actor: bool = False
