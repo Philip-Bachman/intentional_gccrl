@@ -33,7 +33,7 @@ class SuccessObserver(observers_base.EnvLoopObserver):
     """What to do following environment reset."""
     # If self._rewards is not empty list, then the environment was reset after
     # a completed episode observed by this observer.
-    if self._rewards:
+    if len(self._rewards) > 0:
       success = np.sum(self._rewards) >= 1
       self._success.append(success)
     # set list of observed rewards back to empty to start this new episode
@@ -44,19 +44,17 @@ class SuccessObserver(observers_base.EnvLoopObserver):
     assert timestep.reward in [0, 1]  # enforce "goal reaching" task assumption
     self._rewards.append(timestep.reward)
 
-  def get_metrics(self):
+  def get_metrics(self, ignore_success=False):
     """Returns metrics collected for the current episode."""
     if len(self._rewards) > 0:
       success_1 = float(np.sum(self._rewards) >= 1)
     else:
       success_1 = 0.
-    if len(self._success) < 1000:
-      if len(self._success) > 1:
-        success_1k = np.mean(self._success)
-      else:
-        success_1k = 0.
+    if len(self._success) > 1:
+      lookback = min(1000, len(self._success))
+      success_1k = np.mean(self._success[-lookback:])
     else:
-      success_1k = np.mean(self._success[-1000:])
+      success_1k = 0.
     return {
         'success': success_1,
         'success_1000': success_1k,

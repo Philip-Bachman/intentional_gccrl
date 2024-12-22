@@ -18,6 +18,7 @@ import operator
 import time
 import collections
 import tree
+import inspect
 from random import sample
 from typing import List, Optional, Sequence
 
@@ -32,6 +33,12 @@ import dm_env
 from dm_env import specs
 import numpy as np
 import jax
+
+
+def has_named_argument(func, arg_name):
+  """Check if 'func' has a parameter named 'arg_name'."""
+  sig = inspect.signature(func)
+  return arg_name in sig.parameters
 
 
 def _generate_zeros_from_spec(spec: specs.Array) -> np.ndarray:
@@ -140,10 +147,7 @@ class FancyEnvironmentLoop(core.Worker):
     """
     # Reset any counts and start the environment.
     episode_start_time = time.time()
-    select_action_durations: List[float] = []
-    env_step_durations: List[float] = []
     episode_steps: int = 0
-    episode_env_goal = None
     episode_rnd_goal = None
 
     # For evaluation, this keeps track of the total undiscounted reward
@@ -153,10 +157,8 @@ class FancyEnvironmentLoop(core.Worker):
     env_reset_start = time.time()
     timestep = self._environment.reset()
 
-    episode_env_goal = self._get_goal(timestep)
+    # decide whether to sample a goal for this episode from the local buffer
     if (len(self._goal_buffer) > self._rb_warmup):
-      # apply additional heuristics to decide whether to sample a goal
-      # from the local buffer of "viable" goals
       if (not self._use_env_goal) and (np.random.rand() < 0.5):
         episode_rnd_goal = self._goal_buffer.sample(1)[0]
         timestep = self._set_goal(timestep, episode_rnd_goal)
@@ -176,19 +178,16 @@ class FancyEnvironmentLoop(core.Worker):
     # Run an episode.
     while not timestep.last():
       # Give the actor the opportunity to update itself.
-      if (((episode_steps % 1) == 0) and (self._update_actor_per == 'step')):
+      if (self._update_actor_per == 'step'):
           self._actor.update()
 
       # Book-keeping.
       episode_steps += 1
 
       # Generate an action from the agent's policy.
-      select_action_start = time.time()
       action = self._actor.select_action(timestep.observation)
-      select_action_durations.append(time.time() - select_action_start)
 
       # Step the environment with the agent's selected action.
-      env_step_start = time.time()
       timestep = self._environment.step(action)
       if (np.random.rand() < 0.01):
         # add a "viable" goal to the local goal buffer
@@ -196,8 +195,6 @@ class FancyEnvironmentLoop(core.Worker):
         self._goal_buffer.append(timestep.observation[:self._obs_dim])
       if episode_rnd_goal is not None:
         timestep = self._set_goal(timestep, episode_rnd_goal)
-
-      env_step_durations.append(time.time() - env_step_start)
 
       # Have the agent and observers observe the timestep.
       self._actor.observe(action, next_timestep=timestep)
@@ -225,8 +222,6 @@ class FancyEnvironmentLoop(core.Worker):
         'episode_return': episode_return,
         'steps_per_second': steps_per_second,
         'env_reset_duration_sec': env_reset_duration,
-        'select_action_duration_sec': np.mean(select_action_durations),
-        'env_step_duration_sec': np.mean(env_step_durations),
     }
     result.update(counts)
     for observer in self._observers:

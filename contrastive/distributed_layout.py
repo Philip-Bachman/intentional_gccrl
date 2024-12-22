@@ -54,13 +54,14 @@ def get_actor_logger_fn(
   """Creates an actor logger."""
 
   def create_logger(actor_id):
+    save_data = (actor_id == 0)
     return make_default_logger(
         'actor',
-        save_data=(actor_id == 0),
+        save_data=save_data,
         save_dir=save_dir,
         add_uid=add_uid,
         steps_key='actor_steps',
-        use_tboard=use_tboard,
+        use_tboard=(use_tboard and save_data),
         use_term=True)
   return create_logger
 
@@ -74,7 +75,6 @@ def get_observers(config):
   return observers
 
 
-
 class DistributedLayout:
   """Program definition for a distributed agent based on a builder."""
 
@@ -86,7 +86,6 @@ class DistributedLayout:
       environment_factory_eval,
       network_factory,
       num_actors,
-      evaluator_factories = (),
       device_prefetch = True,
       prefetch_size = 1,
       max_number_of_steps = None,
@@ -105,37 +104,43 @@ class DistributedLayout:
     self._device_prefetch = device_prefetch
     self._prefetch_size = prefetch_size
     self._max_number_of_steps = max_number_of_steps
-    self._evaluator_factories = evaluator_factories
     self._actor_observers = get_observers(config)
     self._multithreading_colocate_learner_and_reverb = (
         multithreading_colocate_learner_and_reverb)
     self._config = config
     self._checkpointing_config = \
       CheckpointingConfig(save_dir, add_uid=config.add_uid)
-    #
     # WARNING -- we assume all environments from self._environment_factory_train
     #            have the same spec!!!
-    #
     dummy_seed = 1
     self._dummy_environment_spec = \
       specs.make_environment_spec(environment_factory_train(dummy_seed))
     
     # ...
-    
-    logger_fn = functools.partial(make_default_logger,
+    _learner_logger_fn = functools.partial(make_default_logger,
                                   'learner', save_data=True,
                                   asynchronous=True,
                                   serialize_fn=utils.fetch_devicearray,
                                   save_dir=save_dir,
                                   add_uid=config.add_uid,
-                                  steps_key='learner_steps', use_term=False,
+                                  steps_key='learner_steps',
+                                  use_term=False,
                                   use_tboard=True)
-    self._builder = ContrastiveBuilder(config, logger_fn=logger_fn)
+    self._builder = ContrastiveBuilder(config, logger_fn=_learner_logger_fn)
 
     # ...
     self._actor_logger_fn = get_actor_logger_fn(save_dir=save_dir,
                                                 add_uid=config.add_uid,
                                                 use_tboard=True)
+    
+    self._evaluator_logger_fn = functools.partial(
+      make_default_logger,
+      'evaluator', save_data=True,
+      save_dir=save_dir,
+      add_uid=config.add_uid,
+      steps_key='actor_steps',
+      use_term=False,
+      use_tboard=True)
 
   def replay(self):
     """The replay storage."""
@@ -190,17 +195,18 @@ class DistributedLayout:
   ):
     """Actor process for interacting wth environment and collecting data."""
     rb_adder = self._builder.make_adder(replay)
-
+    # create environment
     environment_key, actor_key = jax.random.split(random_key)
-
-    # environments normally require uint32 as a seed.
     environment = self._environment_factory_train(
         utils.sample_uint32(environment_key))
-
+    # create networks
     networks = self._network_factory(self._dummy_environment_spec)
     policy_fn = apply_policy_and_sample(networks)
-    actor = self._builder.make_actor(actor_key, policy_fn, variable_source,
-                                     rb_adder=rb_adder)
+    actor = self._builder.make_actor(
+      actor_key, policy_fn, variable_source, rb_adder=rb_adder
+    )
+    # create observers
+    observers = get_observers(self._config)
 
     # Create logger and counter.
     counter = counting.Counter(counter, 'actor')
@@ -208,10 +214,39 @@ class DistributedLayout:
     logger = self._actor_logger_fn(actor_id)
     # Create the loop to connect environment and agent.
     return FancyEnvironmentLoop(environment, actor, counter,
-                                logger, observers=self._actor_observers,
+                                logger, observers=observers,
                                 use_env_goal=self._config.use_env_goal,
                                 update_actor_per='step',
                                 rb_warmup=100)
+
+  def evaluator(
+      self,
+      random_key,
+      variable_source,
+      counter
+  ):
+    """Evaluator process for interacting wth environment and collecting data."""
+    # create environment
+    environment_key, actor_key = jax.random.split(random_key)
+    environment = self._environment_factory_eval(
+      utils.sample_uint32(environment_key))
+    # crate networks
+    networks = self._network_factory(self._dummy_environment_spec)
+    policy_fn = apply_policy_and_sample(networks, True)
+    actor = self._builder.make_actor(
+      actor_key, policy_fn, variable_source
+    )
+    # create observers
+    observers = get_observers(self._config)
+
+    # Create logger and counter.
+    counter = counting.Counter(counter, 'evaluator')
+    logger = self._evaluator_logger_fn()
+    # Create the loop to connect environment and agent.
+    return FancyEnvironmentLoop(environment, actor, counter,
+                                logger, observers=observers,
+                                update_actor_per='episode',
+                                use_env_goal=True)
 
   def coordinator(
       self,
@@ -257,11 +292,10 @@ class DistributedLayout:
         learner = program.add_node(learner_node)
 
     with program.group('evaluator'):
-      for evaluator in self._evaluator_factories:
-        evaluator_key, key = jax.random.split(key)
-        program.add_node(
-            lp.CourierNode(evaluator, evaluator_key, learner, counter,
-                           self._builder.make_actor))
+      evaluator_key, key = jax.random.split(key)
+      program.add_node(
+          lp.CourierNode(self.evaluator, evaluator_key, learner, counter)
+      )
 
     with program.group('actor'):
       for actor_id in range(self._num_actors):
