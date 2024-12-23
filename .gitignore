@@ -4,6 +4,7 @@ contrastive/.ipynb_checkpoints/
 __pycache__/
 contrastive/__pycache__/
 logs/
+plot_logs/
 *.pyc
 *.out
 *.mp4

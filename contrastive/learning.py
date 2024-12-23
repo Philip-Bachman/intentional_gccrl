@@ -93,9 +93,9 @@ class ContrastiveLearner(acme.Learner):
       I = jnp.eye(batch_size)
 
       # each (state, policy goal, perturbation goal) tuple corresponds to:
-      state = transitions.extras['state_current']     # current state
-      pert_goal = transitions.extras['state_future']  # state we want to perturb to
-      policy_goal = transitions.extras['policy_goal']     # state policy wants to reach
+      state = transitions.extras['state_current']      # current state
+      pert_goal = transitions.extras['state_future']   # state we perturb towards
+      policy_goal = transitions.extras['policy_goal']  # state policy is seeking
       action = transitions.action
       obs_packed = jnp.concatenate([state, policy_goal], axis=1)
       
@@ -133,13 +133,19 @@ class ContrastiveLearner(acme.Learner):
         key,
       ):
 
-      # state     : current state
-      # pert_goal : discounted future state
+      # state       : current state
+      # pert_goal   : discounted future state
       # policy_goal : goal of policy that produced this (state, future state) pair
       state = transitions.extras['state_current']
       pert_goal = transitions.extras['state_future']
-      policy_goal = transitions.extras['policy_goal']
-      shuff_pert_goal = jnp.roll(pert_goal, 1, axis=0)
+      policy_goal = transitions.extras['policy_goal']  # use "on-policy" policy goals
+      pert_goal_shuffled = jnp.roll(pert_goal, 1, axis=0)
+
+      # shuffle half of the policy goals to be "off-policy"
+      pg_1, pg_2 = jnp.array_split(policy_goal, 2, axis=0)
+      gp_1, gp_2 = jnp.array_split(pert_goal, 2, axis=0)
+      # policy_goal = jnp.concatenate([pg_1, jnp.roll(pg_2, 3, axis=0)], axis=0)
+      policy_goal = jnp.concatenate([pg_1, jnp.roll(gp_2, 3, axis=0)], axis=0)
 
       if config.random_goals == 0:
         # train actor only on intra-episode future states
@@ -149,12 +155,12 @@ class ContrastiveLearner(acme.Learner):
       elif config.random_goals == 1:
         # train actor 50/50 on intra-episode future states and random states
         train_state = jnp.concatenate([state, state], axis=0)
-        train_pert_goal = jnp.concatenate([pert_goal, shuff_pert_goal], axis=0)
+        train_pert_goal = jnp.concatenate([pert_goal, pert_goal_shuffled], axis=0)
         train_policy_goal = jnp.concatenate([policy_goal, policy_goal], axis=0)
       elif config.random_goals == 2:
         # train actor only on random states
         train_state = state
-        train_pert_goal = shuff_pert_goal
+        train_pert_goal = pert_goal_shuffled
         train_policy_goal = policy_goal
 
       obs_packed = jnp.concatenate([train_state, train_policy_goal], axis=-1)

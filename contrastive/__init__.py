@@ -1,6 +1,6 @@
 """Contrastive RL agent."""
 
-from contrastive.agents import ContrastiveDistributedLayout
+from contrastive.distributed_layout import ContrastiveDistributedLayout
 from contrastive.builder import ContrastiveBuilder
 from contrastive.config import ContrastiveConfig
 from contrastive.learning import ContrastiveLearner

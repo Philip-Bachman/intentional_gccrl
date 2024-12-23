@@ -75,7 +75,7 @@ def get_observers(config):
   return observers
 
 
-class DistributedLayout:
+class ContrastiveDistributedLayout:
   """Program definition for a distributed agent based on a builder."""
 
   def __init__(
@@ -87,12 +87,14 @@ class DistributedLayout:
       network_factory,
       num_actors,
       device_prefetch = True,
-      prefetch_size = 1,
       max_number_of_steps = None,
       multithreading_colocate_learner_and_reverb = False):
 
-    if prefetch_size < 0:
-      raise ValueError(f'Prefetch size={prefetch_size} should be non negative')
+    # Check that the environment-specific parts of the config have been set.
+    assert config.max_episode_steps > 0
+    assert config.obs_dim > 0
+    if config.prefetch_size < 0:
+      raise ValueError(f'Prefetch size={config.prefetch_size} should be non negative')
 
     save_dir = config.log_dir + config.alg_name + '_' + config.env_name + '_' + str(seed)
 
@@ -102,7 +104,7 @@ class DistributedLayout:
     self._network_factory = network_factory
     self._num_actors = num_actors
     self._device_prefetch = device_prefetch
-    self._prefetch_size = prefetch_size
+    self._prefetch_size = config.prefetch_size
     self._max_number_of_steps = max_number_of_steps
     self._actor_observers = get_observers(config)
     self._multithreading_colocate_learner_and_reverb = (

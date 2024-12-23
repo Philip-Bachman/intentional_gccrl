@@ -25,7 +25,6 @@ def make_default_logger(
     steps_key: str = 'steps',
     use_term: bool = False,
     use_tboard: bool = False,
-    keys_tboard: list = None
 ) -> base.Logger:
   """Makes a default Acme logger.
 
@@ -40,7 +39,6 @@ def make_default_logger(
     steps_key: key for field that indicates steps (ie, x axis) for tboard plots
     use_term: bool = False,
     use_tboard: whether to push plots to tensorboard
-    keys_tboard: optional list of keys telling what to actually plot in tboard
 
   Returns:
     A logger object that responds to logger.write(some_dict).
@@ -59,13 +57,9 @@ def make_default_logger(
   if save_data:
     loggers.append(csv.CSVLogger(label=label, directory_or_file=save_dir))
   if use_tboard:
-    tb_logger = tf_summary.TFSummaryLogger(label=label, logdir=save_dir, steps_key=steps_key)
-    if keys_tboard is not None:
-      # add some filtering to tboard logger to avoid massive plot dumps
-      # -- we only do "keep" filtering...
-      tb_logger = filters.KeyFilter(tb_logger, keep=keys_tboard)
-      pass
-    loggers.append(tb_logger)
+    loggers.append(
+      tf_summary.TFSummaryLogger(label=label, logdir=save_dir, steps_key=steps_key)
+    )
   assert len(loggers) > 0
 
   # Dispatch to all writers and filter Nones and by time.
