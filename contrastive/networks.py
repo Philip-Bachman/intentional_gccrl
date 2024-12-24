@@ -62,7 +62,7 @@ def make_mlp(
   for l_sz, is_f in zip(layer_sizes, is_final):
     if is_f and cold_init and (out_layer is None):
       # this should be for final layers in the critic
-      layer_list.append(hk.Linear(l_sz, w_init=hk.initializers.VarianceScaling(1e-1, 'fan_avg', 'uniform')))
+      layer_list.append(hk.Linear(l_sz, w_init=hk.initializers.VarianceScaling(1e-2, 'fan_avg', 'uniform')))
     else:
       # this should be for hidden layers in the actor and critic
       layer_list.append(hk.Linear(l_sz, w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform')))

@@ -3,3 +3,5 @@ export LD_LIBRARY_PATH=/home/philip/anaconda3/envs/contrastive_rl/lib/:$LD_LIBRA
 export LD_LIBRARY_PATH=/home/philip/.mujoco/mujoco210/bin:$LD_LIBRARY_PATH
 export LD_LIBRARY_PATH=/usr/lib/cuda/lib64:$LD_LIBRARY_PATH
 export LD_LIBRARY_PATH=/usr/lib/nvidia:$LD_LIBRARY_PATH
+
+CUDA_VISIBLE_DEVICES=1 python lp_contrastive.py --num_steps 15000000 --seed=123 --env=sawyer_peg
