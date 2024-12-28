@@ -4,6 +4,7 @@ import logging
 from typing import Any, Callable, Mapping, Optional
 
 from acme.utils import paths
+from acme.utils.loggers import NoOpLogger
 from acme.utils.loggers import aggregators
 from acme.utils.loggers import asynchronous as async_logger
 from acme.utils.loggers import base
@@ -60,7 +61,9 @@ def make_default_logger(
     loggers.append(
       tf_summary.TFSummaryLogger(label=label, logdir=save_dir, steps_key=steps_key)
     )
-  assert len(loggers) > 0
+  if len(loggers) <= 0:
+    print('WARNING -- creating some NoOpLoggers!!')
+    loggers.append(NoOpLogger())
 
   # Dispatch to all writers and filter Nones and by time.
   logger = aggregators.Dispatcher(loggers, serialize_fn)

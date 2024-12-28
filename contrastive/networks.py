@@ -113,6 +113,8 @@ def make_networks(
     sag_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                            out_layer=None, use_ln=True, cold_init=True)
     sag_repr = sag_encoder(jnp.concatenate([state, action, policy_goal], axis=-1))
+    # sag_repr_norm = jnp.linalg.norm(sag_repr, axis=1, keepdims=True)
+    # sag_repr = sag_repr / (sag_repr_norm + 1e-5)
 
     # encoder for perturbation goals
     g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,

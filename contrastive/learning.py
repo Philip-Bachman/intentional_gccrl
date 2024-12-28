@@ -141,10 +141,10 @@ class ContrastiveLearner(acme.Learner):
       policy_goal = transitions.extras['policy_goal']  # use "on-policy" policy goals
       pert_goal_shuffled = jnp.roll(pert_goal, 1, axis=0)
 
-      # shuffle half of the policy goals to be "off-policy"
-      pg_1, pg_2 = jnp.array_split(policy_goal, 2, axis=0)
-      gp_1, gp_2 = jnp.array_split(pert_goal, 2, axis=0)
-      policy_goal = jnp.concatenate([pg_1, jnp.roll(gp_2, 3, axis=0)], axis=0)
+      # # shuffle half of the policy goals to be "off-policy"
+      # pg_1, pg_2 = jnp.array_split(policy_goal, 2, axis=0)
+      # gp_1, gp_2 = jnp.array_split(pert_goal, 2, axis=0)
+      # policy_goal = jnp.concatenate([pg_1, jnp.roll(gp_2, 3, axis=0)], axis=0)
 
       if config.random_goals == 0:
         # train actor only on intra-episode future states

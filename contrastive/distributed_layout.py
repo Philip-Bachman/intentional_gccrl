@@ -62,7 +62,7 @@ def get_actor_logger_fn(
         add_uid=add_uid,
         steps_key='actor_steps',
         use_tboard=(use_tboard and save_data),
-        use_term=True)
+        use_term=save_data)
   return create_logger
 
 
