@@ -24,7 +24,6 @@ class ContrastiveNetworks:
   policy_network: networks_lib.FeedForwardNetwork
   q_network: networks_lib.FeedForwardNetwork
   log_prob: networks_lib.LogProbFn
-  repr_fn: Callable[Ellipsis, networks_lib.NetworkOutput]
   sample: networks_lib.SampleFn
   sample_eval: Optional[networks_lib.SampleFn] = None
 
@@ -113,8 +112,6 @@ def make_networks(
     sag_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                            out_layer=None, use_ln=True, cold_init=True)
     sag_repr = sag_encoder(jnp.concatenate([state, action, policy_goal], axis=-1))
-    # sag_repr_norm = jnp.linalg.norm(sag_repr, axis=1, keepdims=True)
-    # sag_repr = sag_repr / (sag_repr_norm + 1e-5)
 
     # encoder for perturbation goals
     g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
@@ -162,7 +159,6 @@ def make_networks(
 
   policy = hk.without_apply_rng(hk.transform(_actor_fn))
   critic = hk.without_apply_rng(hk.transform(_critic_fn))
-  repr_fn = hk.without_apply_rng(hk.transform(_repr_fn))
 
   # create dummy observations and actions to create network parameters.
   # -- it's important to note that the "observation" expected here is a
@@ -189,7 +185,6 @@ def make_networks(
   return ContrastiveNetworks(
       policy_network=policy_network,
       q_network=q_network,
-      repr_fn=repr_fn.apply,
       log_prob=lambda params, actions: params.log_prob(actions),
       sample=lambda params, key: params.sample(seed=key),
       sample_eval=lambda params, key: params.mode())
