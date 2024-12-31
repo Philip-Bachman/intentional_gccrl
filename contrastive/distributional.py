@@ -15,6 +15,26 @@ _MIN_SCALE = 1e-4
 Initializer = hk.initializers.Initializer
 
 
+#
+# JAX function for "identity with activation shrinkage"
+#
+@jax.custom_vjp
+def value_decay(x):
+    return x
+
+def value_decay_fwd(x):
+    primal_out = x
+    residual = x
+    return primal_out, residual
+
+def value_decay_bwd(residual, grad_output):
+    (x,) = (residual,)
+    dL_dx = grad_output + 1e-8 * x
+    return (dL_dx,)
+
+value_decay.defvjp(value_decay_fwd, value_decay_bwd)
+
+
 class CategoricalHead(hk.Module):
   """Module that produces a categorical distribution with the given number of values."""
 
@@ -118,11 +138,12 @@ class NormalTanhDistribution(hk.Module):
     self._loc_layer = hk.Linear(num_dimensions, w_init=w_init, b_init=b_init)
     self._scale_layer = hk.Linear(num_dimensions, w_init=w_init, b_init=b_init)
     self._rescale = tfp.bijectors.Scale(scale=rescale)
-    self._pre_tanh_activations = None
 
   def __call__(self, inputs: jnp.ndarray) -> tfd.Distribution:
-    self._pre_tanh_activations = self._loc_layer(inputs)
-    loc = 10. * jax.lax.tanh(self._pre_tanh_activations / 10.)
+    loc = value_decay(self._loc_layer(inputs))
+    # scale = value_decay(self._scale_layer(inputs))
+    # loc = self._loc_layer(inputs)
+    # loc = 10. * jax.lax.tanh(loc / 10.)
     scale = jax.nn.softplus(self._scale_layer(inputs)) + self._min_scale
     distribution = tfd.Normal(loc=loc, scale=scale)
     distribution = TanhTransformedDistribution(distribution)
