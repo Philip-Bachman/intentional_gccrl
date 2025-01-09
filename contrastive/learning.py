@@ -8,6 +8,7 @@ import optax
 from jax.scipy.special import logsumexp
 import numpy as np
 from jax import random
+from jax import lax
 
 import acme
 from acme import types
@@ -151,7 +152,7 @@ class ContrastiveLearner(acme.Learner):
       dist_params = networks.policy_network.apply(
         policy_params, jnp.concatenate([obs_packed, train_pert_goal], axis=-1))
       action = networks.sample(dist_params, key)
-      log_prob = networks.log_prob(dist_params, action)
+      action_log_prob = networks.log_prob(dist_params, action)
 
       # compute loss for optimizing goal-conditioned actor
       q_action, _, g_repr = networks.q_network.apply(
@@ -159,7 +160,7 @@ class ContrastiveLearner(acme.Learner):
       actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
 
       # action entropy loss
-      approx_entropy = -log_prob
+      approx_entropy = -action_log_prob
 
       if config.use_action_entropy:
         actor_loss -= alpha * approx_entropy # negative -(-log prob): maximize entropy
@@ -170,8 +171,8 @@ class ContrastiveLearner(acme.Learner):
       actor_loss_policy_goal = jnp.mean(actor_loss[(2 * chunk_size):])
       loss_sgcrl = 0.5 * (actor_loss_pert_goal + actor_loss_pert_goal_shuffled)
       loss_crl = actor_loss_policy_goal
-      blend = 1.0
-      actor_loss = (blend * loss_sgcrl) + ((1 - blend) * loss_crl)
+      blend = 0.9
+      actor_loss = (blend * loss_sgcrl) + ((1. - blend) * loss_crl)
 
       # compute some potentially interesting metrics for goal similarity
       g_repr_pert = g_repr[:chunk_size, :]

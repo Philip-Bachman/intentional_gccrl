@@ -36,7 +36,8 @@ fixed_goal_dict={'point_Spiral11x11': [np.array([5,5], dtype=float), np.array([1
                      #note: sawyer fixed goal positions vary slightly with each episode
                       'sawyer_bin': np.array([0.12, 0.7, 0.02]),
                       'sawyer_box': np.array([0.0, 0.75, 0.133]),
-                      'sawyer_peg': np.array([-0.3, 0.6, 0.0])}
+                      'sawyer_peg': np.array([-0.3, 0.6, 0.0]),
+                      'sawyer_box2': np.array([0.0, 0.75, 0.133])}
 
 
 def get_program(params):
@@ -63,6 +64,7 @@ def get_program(params):
       obs_dim=config.obs_dim,
       repr_dim=config.repr_dim,
       use_image_obs=config.use_image_obs,
+      actor_min_std=config.actor_min_std,
       hidden_layer_sizes=config.hidden_layer_sizes,
       use_policy_goal_critic=config.use_policy_goal_critic,
       use_policy_goal_actor=config.use_policy_goal_actor)

@@ -6,6 +6,8 @@ from acme import specs
 from acme.agents.jax import actor_core as actor_core_lib
 from acme.jax import networks as networks_lib
 from acme.jax import utils
+from acme.jax.networks.base import NetworkOutput, Action, LogProb, Value, \
+                                   PRNGKey, FeedForwardNetwork
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -18,14 +20,19 @@ from itertools import product
 from contrastive.distributional import NormalTanhDistribution
 
 
+# recapitulate some typedefs from acme.jax.networks...
+LogProbFn = Callable[[NetworkOutput, Action], LogProb]
+SampleFn  = Callable[[NetworkOutput, PRNGKey], Action]
+
+
 @dataclasses.dataclass
 class ContrastiveNetworks:
   """Network and pure functions for the Contrastive RL agent."""
-  policy_network: networks_lib.FeedForwardNetwork
-  q_network: networks_lib.FeedForwardNetwork
-  log_prob: networks_lib.LogProbFn
-  sample: networks_lib.SampleFn
-  sample_eval: Optional[networks_lib.SampleFn] = None
+  policy_network: FeedForwardNetwork
+  q_network: FeedForwardNetwork
+  log_prob: LogProbFn
+  sample: SampleFn
+  sample_eval: Optional[SampleFn] = None
 
 
 def apply_policy_and_sample(
@@ -177,9 +184,9 @@ def make_networks(
   # -- observations during learning like [state; policy goal; perturbation goal]
   # -- differences in observation shapes are handled by the actor network
   dummy_packed_obs = jnp.concatenate([dummy_state, dummy_goal], axis=-1)
-  policy_network = networks_lib.FeedForwardNetwork(
+  policy_network = FeedForwardNetwork(
           lambda key: policy.init(key, dummy_packed_obs), policy.apply)
-  q_network = networks_lib.FeedForwardNetwork(
+  q_network = FeedForwardNetwork(
           lambda key: critic.init(key, dummy_packed_obs, dummy_action, dummy_goal), critic.apply)
 
   return ContrastiveNetworks(

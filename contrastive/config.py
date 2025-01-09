@@ -39,6 +39,7 @@ class ContrastiveConfig:
   # coefficient will be used.
   use_action_entropy: bool = False
   entropy_alpha: float = 0.0
+  actor_min_std: float = 1e-3
 
   # Replay options
   min_replay_size: int = 10000

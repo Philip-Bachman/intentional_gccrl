@@ -29,7 +29,7 @@ def value_decay_fwd(x):
 
 def value_decay_bwd(residual, grad_output):
     (x,) = (residual,)
-    dL_dx = grad_output + 1e-6 * x
+    dL_dx = grad_output + 1e-8 * x
     return (dL_dx,)
 
 value_decay.defvjp(value_decay_fwd, value_decay_bwd)
@@ -133,7 +133,7 @@ class NormalTanhDistribution(hk.Module):
       w_init: Initialization for linear layer weights.
       b_init: Initialization for linear layer biases.
     """
-    super().__init__(name='Normal')
+    super().__init__(name='Distribution')
     self._min_scale = min_scale
     self._loc_layer = hk.Linear(num_dimensions, w_init=w_init, b_init=b_init)
     self._scale_layer = hk.Linear(num_dimensions, w_init=w_init, b_init=b_init)
@@ -142,9 +142,10 @@ class NormalTanhDistribution(hk.Module):
   def __call__(self, inputs: jnp.ndarray) -> tfd.Distribution:
     # loc = value_decay(self._loc_layer(inputs))
     # scale = value_decay(self._scale_layer(inputs))
+    # scale = self._min_scale + (0. * loc)
     loc = self._loc_layer(inputs)
-    loc = 10. * jax.lax.tanh(loc / 10.)
-    scale = jax.nn.softplus(self._scale_layer(inputs)) + self._min_scale
+    scale = self._scale_layer(inputs)
+    scale = jax.nn.softplus(scale - 2.0) + self._min_scale
     distribution = tfd.Normal(loc=loc, scale=scale)
     distribution = TanhTransformedDistribution(distribution)
     distribution = tfd.TransformedDistribution(distribution, self._rescale)
