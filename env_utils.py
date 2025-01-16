@@ -308,11 +308,12 @@ class SawyerBox2(
         self._goal_pos = t * pos_goal + (1 - t) * pos_init
     
     # 
-    # self._goal_quat is orientation for box lid
-    # self._goal2_pos
-    self._goal_quat = np.array([0.707, 0, 0, 0.707]) # ideal orientation of lid
-    
-    self._goal2_pos = self._goal_pos + np.array([0,0,-0.11])
+    # self._goal_quat  : goal orientation for box lid
+    # self._goal2_pos  : goal xyz for cube (a bit below box lid handle)
+    # self._target_pos : goal xyz for box lid
+    #
+    self._goal_quat = np.array([0.707, 0, 0, 0.707])
+    self._goal2_pos = self._goal_pos + np.array([0, 0, -0.11])
     self._target_pos = self._goal_pos    
     return self._get_obs()
 
@@ -327,7 +328,7 @@ class SawyerBox2(
     dist_quat = np.linalg.norm(self._goal_quat - obj_quat)
     
     obs = self._get_obs()
-    r = float((dist_pos+dist_pos2) < 0.16 and dist_quat < 0.08)  # Taken from metaworld
+    r = float((dist_pos + dist_pos2) < 0.16 and dist_quat < 0.08)  # Taken from metaworld
     done = False
     info = {}
     
@@ -346,6 +347,11 @@ class SawyerBox2(
     obj2_pos = self._get_pos_objects2()
     obj_quat = self._get_quat_objects()
     
+    # obs[0:3]   = hand position xyz
+    # obs[3:4]   = gripper distance apart
+    # obs[4:7]   = box lid position xyz
+    # obs[7:10]  = cube position xyz
+    # obs[10:14] = box lid quaternion (orientation)
     obs = np.concatenate((pos_hand, [gripper_distance_apart],
                           obj_pos, obj2_pos, obj_quat))
     goal = np.concatenate([self._goal_pos + np.array([0.0, 0.0, 0.03]),
