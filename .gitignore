@@ -6,6 +6,7 @@ contrastive/__pycache__/
 logs/
 plot_logs/
 old_logs/
+older_logs/
 *.pyc
 *.out
 *.mp4

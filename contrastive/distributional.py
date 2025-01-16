@@ -141,9 +141,9 @@ class NormalTanhDistribution(hk.Module):
 
   def __call__(self, inputs: jnp.ndarray) -> tfd.Distribution:
     # loc = value_decay(self._loc_layer(inputs))
+    loc = self._loc_layer(inputs)
     # scale = value_decay(self._scale_layer(inputs))
     # scale = self._min_scale + (0. * loc)
-    loc = self._loc_layer(inputs)
     scale = self._scale_layer(inputs)
     scale = jax.nn.softplus(scale - 2.0) + self._min_scale
     distribution = tfd.Normal(loc=loc, scale=scale)

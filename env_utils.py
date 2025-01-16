@@ -26,7 +26,7 @@ def load(env_name, fixed_goal=None):
     kwargs['fixed_goal'] = fixed_goal
   elif env_name == 'sawyer_box2':
     CLASS = SawyerBox2
-    max_episode_steps = 300
+    max_episode_steps = 200
     kwargs['fixed_goal'] = fixed_goal
   elif env_name == 'sawyer_peg':
     CLASS = SawyerPeg
@@ -296,17 +296,23 @@ class SawyerBox2(
 
   def reset(self):
     super(SawyerBox2, self).reset()
-    pos1 = self._target_pos.copy()
-    pos2 = self._get_pos_objects().copy()
+    pos_goal = self._target_pos.copy()         # goal based on initial state
+    pos_init = self._get_pos_objects().copy()  # initial state (kinda random)
     
     if self._fixed_goal is not None:
-        self._goal_pos = pos1 # Set the goal to be a fixed location
+        # use the generated environment/task goal
+        self._goal_pos = pos_goal
     else:
+        # set goal to random interpolation of "real" goal and initial state
         t = np.random.random()
-        self._goal_pos = t * pos1 + (1 - t) * pos2
-        
+        self._goal_pos = t * pos_goal + (1 - t) * pos_init
+    
+    # 
+    # self._goal_quat is orientation for box lid
+    # self._goal2_pos
     self._goal_quat = np.array([0.707, 0, 0, 0.707]) # ideal orientation of lid
-    self._goal2_pos = self._goal_pos - np.array([0,0,-0.11])
+    
+    self._goal2_pos = self._goal_pos + np.array([0,0,-0.11])
     self._target_pos = self._goal_pos    
     return self._get_obs()
 

@@ -171,7 +171,7 @@ class ContrastiveLearner(acme.Learner):
       actor_loss_policy_goal = jnp.mean(actor_loss[(2 * chunk_size):])
       loss_sgcrl = 0.5 * (actor_loss_pert_goal + actor_loss_pert_goal_shuffled)
       loss_crl = actor_loss_policy_goal
-      blend = 0.9
+      blend = 1.0
       actor_loss = (blend * loss_sgcrl) + ((1. - blend) * loss_crl)
 
       # compute some potentially interesting metrics for goal similarity
