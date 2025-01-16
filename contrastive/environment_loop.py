@@ -19,6 +19,7 @@ import time
 import collections
 import tree
 import inspect
+import cv2
 from random import sample
 from typing import List, Optional, Sequence
 
@@ -99,7 +100,8 @@ class FancyEnvironmentLoop(core.Worker):
       label: str = 'environment_loop',
       observers: Sequence[observers_lib.EnvLoopObserver] = (),
       use_env_goal: Optional[bool] = True,
-      rb_warmup: Optional[int] = 100
+      rb_warmup: Optional[int] = 100,
+      render_freq: Optional[int] = -1,
   ):
     # check for some additional env features that we want...
     assert hasattr(environment, 'obs_dim')
@@ -114,6 +116,9 @@ class FancyEnvironmentLoop(core.Worker):
         label, steps_key=self._counter.get_steps_key())
     self._update_actor_per = update_actor_per
     self._observers = observers
+    self._render_freq = render_freq
+    self._frame_buffer = collections.deque(maxlen=(9000))
+    self._render_count = 0
 
     # extra stuff for managing additional state
     self._use_env_goal = use_env_goal
@@ -134,6 +139,42 @@ class FancyEnvironmentLoop(core.Worker):
     if new_goal is not None:
       timestep.observation[self._obs_dim:(self._obs_dim + self._goal_dim)] = new_goal
     return timestep
+  
+  def _render_frame(self, success=False):
+    """Render current environment state and push to frame buffer.
+    """
+    img = self._environment.render(offscreen=True, camera_name="corner3",
+                                   resolution=(640, 480))
+    if success:
+      # indicate success with a green vertical column
+      img[:, :16, :] = 32
+      img[:, :16, 1] = 128
+    self._frame_buffer.append(img)
+    return
+  
+  def _render_buffer(self, ):
+    """Render current episode frame buffer, which may contain many episodes.
+    """
+    counts = self._counter.get_counts()
+    new_buffer = collections.deque(maxlen=self._frame_buffer.maxlen)
+    # set parameters for video writer/rendering
+    fps, height, width = 30, 480, 640  # Frames per second
+    output_path = 'video_bin_actor_sgcrl_eps_{}.avi'.format(counts['actor_episodes'])
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')  # Codec (e.g., 'XVID', 'mp4v', etc.)
+    # create VideoWriter object
+    video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+    # write full frame buffer to video writer and copy to new buffer
+    while self._frame_buffer:
+      frame_rgb = self._frame_buffer.popleft()
+      frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+      video_writer.write(frame_bgr)
+      new_buffer.append(frame_rgb)
+    self._frame_buffer = new_buffer
+
+    # save video
+    video_writer.release()
+    return
 
   def run_episode(self) -> loggers.LoggingData:
     """Run one episode.
@@ -149,12 +190,12 @@ class FancyEnvironmentLoop(core.Worker):
     episode_start_time = time.time()
     episode_steps: int = 0
     episode_rnd_goal = None
+    episode_success = False
 
     # For evaluation, this keeps track of the total undiscounted reward
     # accumulated during the episode.
     episode_return = tree.map_structure(_generate_zeros_from_spec,
                                         self._environment.reward_spec())
-    env_reset_start = time.time()
     timestep = self._environment.reset()
 
     # decide whether to sample a goal for this episode from the local buffer
@@ -163,7 +204,13 @@ class FancyEnvironmentLoop(core.Worker):
         episode_rnd_goal = self._goal_buffer.sample(1)[0]
         timestep = self._set_goal(timestep, episode_rnd_goal)
 
-    env_reset_duration = time.time() - env_reset_start
+    # set flag for whether to render this episode to the frame buffer
+    render_episode = False
+    counts = self._counter.get_counts()
+    if (self._render_freq > 0):
+      if ('evaluator_episodes' in counts):
+        if (counts['evaluator_episodes'] % self._render_freq) == 0:
+          render_episode = True
 
     if self._update_actor_per == 'episode':
       self._actor.update()
@@ -179,9 +226,9 @@ class FancyEnvironmentLoop(core.Worker):
     while not timestep.last():
       # Give the actor the opportunity to update itself.
       if (self._update_actor_per == 'step'):
-          self._actor.update()
+        self._actor.update()
 
-      # Book-keeping.
+      # Bookkeeping.
       episode_steps += 1
 
       # Generate an action from the agent's policy.
@@ -203,6 +250,11 @@ class FancyEnvironmentLoop(core.Worker):
         # environment, the current timestep and the action.
         observer.observe(self._environment, timestep, action)
 
+      # add frames to rendering buffer if we want to render this episode
+      episode_success = (timestep.reward > 0.5) or episode_success
+      if render_episode:
+        self._render_frame(success=episode_success)
+
       # Equivalent to: episode_return += timestep.reward
       # We capture the return value because if timestep.reward is a JAX
       # DeviceArray, episode_return will not be mutated in-place. (In all other
@@ -211,6 +263,15 @@ class FancyEnvironmentLoop(core.Worker):
       episode_return = tree.map_structure(operator.iadd,
                                           episode_return,
                                           timestep.reward)
+
+    # Render a video of multiple episodes, including this episode, if desited
+    if render_episode:
+      self._render_count += 1
+      if (self._render_count % 20) == 0:
+        print('*********************')
+        print('* RENDERING BUFFER! *')
+        print('*********************')
+        self._render_buffer()
 
     # Record counts.
     counts = self._counter.increment(episodes=1, steps=episode_steps)
@@ -221,7 +282,6 @@ class FancyEnvironmentLoop(core.Worker):
         'episode_length': episode_steps,
         'episode_return': episode_return,
         'steps_per_second': steps_per_second,
-        'env_reset_duration_sec': env_reset_duration,
     }
     result.update(counts)
     for observer in self._observers:

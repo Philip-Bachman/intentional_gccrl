@@ -6,6 +6,8 @@ from acme import specs
 from acme.agents.jax import actor_core as actor_core_lib
 from acme.jax import networks as networks_lib
 from acme.jax import utils
+from acme.jax.networks.base import NetworkOutput, Action, LogProb, Value, \
+                                   PRNGKey, FeedForwardNetwork
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -18,15 +20,19 @@ from itertools import product
 from contrastive.distributional import NormalTanhDistribution
 
 
+# recapitulate some typedefs from acme.jax.networks...
+LogProbFn = Callable[[NetworkOutput, Action], LogProb]
+SampleFn  = Callable[[NetworkOutput, PRNGKey], Action]
+
+
 @dataclasses.dataclass
 class ContrastiveNetworks:
   """Network and pure functions for the Contrastive RL agent."""
-  policy_network: networks_lib.FeedForwardNetwork
-  q_network: networks_lib.FeedForwardNetwork
-  log_prob: networks_lib.LogProbFn
-  repr_fn: Callable[Ellipsis, networks_lib.NetworkOutput]
-  sample: networks_lib.SampleFn
-  sample_eval: Optional[networks_lib.SampleFn] = None
+  policy_network: FeedForwardNetwork
+  q_network: FeedForwardNetwork
+  log_prob: LogProbFn
+  sample: SampleFn
+  sample_eval: Optional[SampleFn] = None
 
 
 def apply_policy_and_sample(
@@ -62,7 +68,7 @@ def make_mlp(
   for l_sz, is_f in zip(layer_sizes, is_final):
     if is_f and cold_init and (out_layer is None):
       # this should be for final layers in the critic
-      layer_list.append(hk.Linear(l_sz, w_init=hk.initializers.VarianceScaling(1e-2, 'fan_avg', 'uniform')))
+      layer_list.append(hk.Linear(l_sz, w_init=hk.initializers.VarianceScaling(1e-1, 'fan_avg', 'uniform')))
     else:
       # this should be for hidden layers in the actor and critic
       layer_list.append(hk.Linear(l_sz, w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform')))
@@ -113,8 +119,6 @@ def make_networks(
     sag_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                            out_layer=None, use_ln=True, cold_init=True)
     sag_repr = sag_encoder(jnp.concatenate([state, action, policy_goal], axis=-1))
-    # sag_repr_norm = jnp.linalg.norm(sag_repr, axis=1, keepdims=True)
-    # sag_repr = sag_repr / (sag_repr_norm + 1e-5)
 
     # encoder for perturbation goals
     g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
@@ -162,7 +166,6 @@ def make_networks(
 
   policy = hk.without_apply_rng(hk.transform(_actor_fn))
   critic = hk.without_apply_rng(hk.transform(_critic_fn))
-  repr_fn = hk.without_apply_rng(hk.transform(_repr_fn))
 
   # create dummy observations and actions to create network parameters.
   # -- it's important to note that the "observation" expected here is a
@@ -181,15 +184,14 @@ def make_networks(
   # -- observations during learning like [state; policy goal; perturbation goal]
   # -- differences in observation shapes are handled by the actor network
   dummy_packed_obs = jnp.concatenate([dummy_state, dummy_goal], axis=-1)
-  policy_network = networks_lib.FeedForwardNetwork(
+  policy_network = FeedForwardNetwork(
           lambda key: policy.init(key, dummy_packed_obs), policy.apply)
-  q_network = networks_lib.FeedForwardNetwork(
+  q_network = FeedForwardNetwork(
           lambda key: critic.init(key, dummy_packed_obs, dummy_action, dummy_goal), critic.apply)
 
   return ContrastiveNetworks(
       policy_network=policy_network,
       q_network=q_network,
-      repr_fn=repr_fn.apply,
       log_prob=lambda params, actions: params.log_prob(actions),
       sample=lambda params, key: params.sample(seed=key),
       sample_eval=lambda params, key: params.mode())

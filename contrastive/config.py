@@ -22,7 +22,7 @@ class ContrastiveConfig:
   # env options
   # use_env_goal : whether to use the fixed env goal during training rollouts
   #                note - the fixed env goal is always used in evaluators
-  use_env_goal: bool = False
+  use_env_goal: bool = True
     
   # Loss options
   batch_size: int = 256
@@ -39,6 +39,7 @@ class ContrastiveConfig:
   # coefficient will be used.
   use_action_entropy: bool = False
   entropy_alpha: float = 0.0
+  actor_min_std: float = 1e-3
 
   # Replay options
   min_replay_size: int = 10000
@@ -59,8 +60,8 @@ class ContrastiveConfig:
   use_cpc: bool = False
   use_td: bool = False
   use_image_obs: bool = False
-  use_policy_goal_critic: bool = True
-  use_policy_goal_actor: bool = True
+  use_policy_goal_critic: bool = False
+  use_policy_goal_actor: bool = False
   random_goals: int = 1  # switch for how to sample actor training goals
   jit: bool = True
   add_mc_to_td: bool = False

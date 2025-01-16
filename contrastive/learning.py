@@ -8,6 +8,7 @@ import optax
 from jax.scipy.special import logsumexp
 import numpy as np
 from jax import random
+from jax import lax
 
 import acme
 from acme import types
@@ -141,49 +142,53 @@ class ContrastiveLearner(acme.Learner):
       policy_goal = transitions.extras['policy_goal']  # use "on-policy" policy goals
       pert_goal_shuffled = jnp.roll(pert_goal, 1, axis=0)
 
-      # # shuffle half of the policy goals to be "off-policy"
-      # pg_1, pg_2 = jnp.array_split(policy_goal, 2, axis=0)
-      # gp_1, gp_2 = jnp.array_split(pert_goal, 2, axis=0)
-      # policy_goal = jnp.concatenate([pg_1, jnp.roll(gp_2, 3, axis=0)], axis=0)
-
-      if config.random_goals == 0:
-        # train actor only on intra-episode future states
-        train_state = state
-        train_pert_goal = pert_goal
-        train_policy_goal = policy_goal
-      elif config.random_goals == 1:
-        # train actor 50/50 on intra-episode future states and random states
-        train_state = jnp.concatenate([state, state], axis=0)
-        train_pert_goal = jnp.concatenate([pert_goal, pert_goal_shuffled], axis=0)
-        train_policy_goal = jnp.concatenate([policy_goal, policy_goal], axis=0)
-      elif config.random_goals == 2:
-        # train actor only on random states
-        train_state = state
-        train_pert_goal = pert_goal_shuffled
-        train_policy_goal = policy_goal
+      # train actor 50/50 on intra-episode future states and random states
+      train_state = jnp.concatenate([state, state, state], axis=0)
+      train_pert_goal = jnp.concatenate([pert_goal, pert_goal_shuffled, policy_goal], axis=0)
+      train_policy_goal = jnp.concatenate([policy_goal, policy_goal, policy_goal], axis=0)
+      chunk_size = train_state.shape[0] // 3
 
       obs_packed = jnp.concatenate([train_state, train_policy_goal], axis=-1)
       dist_params = networks.policy_network.apply(
         policy_params, jnp.concatenate([obs_packed, train_pert_goal], axis=-1))
       action = networks.sample(dist_params, key)
-      log_prob = networks.log_prob(dist_params, action)
+      action_log_prob = networks.log_prob(dist_params, action)
 
       # compute loss for optimizing goal-conditioned actor
-      q_action, _, _ = networks.q_network.apply(
+      q_action, _, g_repr = networks.q_network.apply(
         q_params, obs_packed, action, train_pert_goal)
-
       actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
 
       # action entropy loss
-      approx_entropy = -log_prob
+      approx_entropy = -action_log_prob
 
       if config.use_action_entropy:
         actor_loss -= alpha * approx_entropy # negative -(-log prob): maximize entropy
 
-      actor_loss = jnp.mean(actor_loss)
+      # split up actor loss into chunks with different meaning
+      actor_loss_pert_goal = jnp.mean(actor_loss[:chunk_size])
+      actor_loss_pert_goal_shuffled = jnp.mean(actor_loss[chunk_size:(2 * chunk_size)])
+      actor_loss_policy_goal = jnp.mean(actor_loss[(2 * chunk_size):])
+      loss_sgcrl = 0.5 * (actor_loss_pert_goal + actor_loss_pert_goal_shuffled)
+      loss_crl = actor_loss_policy_goal
+      blend = 1.0
+      actor_loss = (blend * loss_sgcrl) + ((1. - blend) * loss_crl)
+
+      # compute some potentially interesting metrics for goal similarity
+      g_repr_pert = g_repr[:chunk_size, :]
+      g_repr_policy = g_repr[(2 * chunk_size):, :]
+      state_goal_sim = jnp.sum((g_repr_pert * g_repr_policy), axis=1)
+      grp_norm_1 = jnp.linalg.norm(g_repr_pert, axis=1)
+      grp_norm_2 = jnp.linalg.norm(g_repr_policy, axis=1)
+      state_goal_csim = state_goal_sim / (grp_norm_1 * grp_norm_2 + 1e-5)
 
       metrics = {
           'entropy_mean': jnp.mean(approx_entropy),
+          'actor_loss_pert_goal': actor_loss_pert_goal,
+          'actor_loss_pert_goal_shuffled': actor_loss_pert_goal_shuffled,
+          'actor_loss_policy_goal': actor_loss_policy_goal,
+          'actor_state_goal_sim': jnp.mean(state_goal_sim),
+          'actor_state_goal_csim': jnp.mean(state_goal_csim),
       }
 
       return actor_loss, metrics

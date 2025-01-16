@@ -122,8 +122,8 @@ class ContrastiveGaussianActor(GenericActor):
     # in the "distributional" layer of policy are still precisely 0
     # -- checking equality on floats is a questionable practice, lol
     # -- assuming 0 init for params is kinda iffy, lol
-    if self._initially_random and (self._params['Normal/~/linear']['b'] == 0).all():
-      shape = self._params['Normal/~/linear']['b'].shape
+    if self._initially_random and (self._params['Distribution/~/linear']['b'] == 0).all():
+      shape = self._params['Distribution/~/linear']['b'].shape
       rng, self._state = jax.random.split(self._state)
       action = jax.random.uniform(key=rng, shape=shape,
                                   minval=-1.0, maxval=1.0)

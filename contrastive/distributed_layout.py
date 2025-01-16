@@ -248,7 +248,8 @@ class ContrastiveDistributedLayout:
     return FancyEnvironmentLoop(environment, actor, counter,
                                 logger, observers=observers,
                                 update_actor_per='episode',
-                                use_env_goal=True)
+                                use_env_goal=True,
+                                render_freq=50)
 
   def coordinator(
       self,

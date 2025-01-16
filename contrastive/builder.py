@@ -156,7 +156,7 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
       # -- goal should be constant through an episode
       policy_goal = sample.data.observation[:-1, self._config.obs_dim:]
 
-      # grab states from the "discounted future" of each state
+      # grab states from the discounted future of each state
       future_state = sample.data.observation[:, :self._config.obs_dim]
       future_state = tf.gather(future_state, future_index[:-1])
       # make "packed" observations like the environment provides
@@ -174,8 +174,7 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
               'state_future': future_state,
               'policy_goal': policy_goal
           })
-      # reorder the batch so it's not always in "temporal" order
-      # -- not clear where this has an effect downstream?
+      # shuffle sequence order here to make the transpose shuffle work later
       shift = tf.random.uniform((), 0, seq_len, tf.int32)
       transition = tree.map_structure(lambda t: tf.roll(t, shift, axis=0),
                                       transition)

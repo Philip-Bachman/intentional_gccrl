@@ -24,6 +24,10 @@ def load(env_name, fixed_goal=None):
     CLASS = SawyerBox
     max_episode_steps = 150
     kwargs['fixed_goal'] = fixed_goal
+  elif env_name == 'sawyer_box2':
+    CLASS = SawyerBox2
+    max_episode_steps = 200
+    kwargs['fixed_goal'] = fixed_goal
   elif env_name == 'sawyer_peg':
     CLASS = SawyerPeg
     max_episode_steps = 150
@@ -60,7 +64,7 @@ class SawyerBin(
     self._use_latent = use_latent
     self._latent = None
     dummy_obs = self.reset()
-      # make obs_dim and goal_dim easily accessible
+    # make obs_dim and goal_dim easily accessible
     self.obs_dim = dummy_obs.shape[0] // 2
     self.goal_dim = dummy_obs.shape[0] // 2
 
@@ -211,7 +215,7 @@ class SawyerPeg(
     self._use_latent = use_latent
     self._latent = None
     dummy_obs = self.reset()
-      # make obs_dim and goal_dim easily accessible
+    # make obs_dim and goal_dim easily accessible
     self.obs_dim = dummy_obs.shape[0] // 2
     self.goal_dim = dummy_obs.shape[0] // 2
 
@@ -265,4 +269,98 @@ class SawyerPeg(
     return gym.spaces.Box(
         low=np.full(2 * 7, -np.inf),
         high=np.full(2 * 7, np.inf),
+        dtype=np.float32)
+  
+
+#
+# HARDER BOX ENVIRONMENT...
+#
+class SawyerBox2(
+    metaworld.envs.mujoco.env_dict.NEW_V2_ENVIRONMENTS['box-close2-v2']):
+  """Wrapper for the SawyerBox environment."""
+
+  def __init__(self, fixed_goal=None):
+    self._goal_pos = np.zeros(3)
+    self._goal2_pos= np.zeros(3)
+    self._goal_quat = np.zeros(4)
+    super(SawyerBox2, self).__init__()
+    self._fixed_goal = fixed_goal
+    self._set_task_called = True
+    self._partially_observable = False
+    self._freeze_rand_vec = False
+    self._freeze_rand_vec2 = False
+    dummy_obs = self.reset()
+    # make obs_dim and goal_dim easily accessible
+    self.obs_dim = dummy_obs.shape[0] // 2
+    self.goal_dim = dummy_obs.shape[0] // 2
+
+  def reset(self):
+    super(SawyerBox2, self).reset()
+    pos_goal = self._target_pos.copy()         # goal based on initial state
+    pos_init = self._get_pos_objects().copy()  # initial state (kinda random)
+    
+    if self._fixed_goal is not None:
+        # use the generated environment/task goal
+        self._goal_pos = pos_goal
+    else:
+        # set goal to random interpolation of "real" goal and initial state
+        t = np.random.random()
+        self._goal_pos = t * pos_goal + (1 - t) * pos_init
+    
+    # 
+    # self._goal_quat  : goal orientation for box lid
+    # self._goal2_pos  : goal xyz for cube (a bit below box lid handle)
+    # self._target_pos : goal xyz for box lid
+    #
+    self._goal_quat = np.array([0.707, 0, 0, 0.707])
+    self._goal2_pos = self._goal_pos + np.array([0, 0, -0.11])
+    self._target_pos = self._goal_pos    
+    return self._get_obs()
+
+  def step(self, action):
+    super(SawyerBox2, self).step(action)
+    obj_pos = self._get_pos_objects()
+    obj2_pos = self._get_pos_objects2()
+    obj_quat = self._get_quat_objects()
+    
+    dist_pos = np.linalg.norm(self._goal_pos - obj_pos)
+    dist_pos2 = np.linalg.norm(self._goal2_pos - obj2_pos)
+    dist_quat = np.linalg.norm(self._goal_quat - obj_quat)
+    
+    obs = self._get_obs()
+    r = float((dist_pos + dist_pos2) < 0.16 and dist_quat < 0.08)  # Taken from metaworld
+    done = False
+    info = {}
+    
+    return obs, r, done, info
+
+  def _get_obs(self):
+    pos_hand = self.get_endeff_pos()
+    finger_right, finger_left = (
+        self._get_site_pos('rightEndEffector'),
+        self._get_site_pos('leftEndEffector')
+    )
+    gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
+    gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0., 1.)
+    
+    obj_pos = self._get_pos_objects()
+    obj2_pos = self._get_pos_objects2()
+    obj_quat = self._get_quat_objects()
+    
+    # obs[0:3]   = hand position xyz
+    # obs[3:4]   = gripper distance apart
+    # obs[4:7]   = box lid position xyz
+    # obs[7:10]  = cube position xyz
+    # obs[10:14] = box lid quaternion (orientation)
+    obs = np.concatenate((pos_hand, [gripper_distance_apart],
+                          obj_pos, obj2_pos, obj_quat))
+    goal = np.concatenate([self._goal_pos + np.array([0.0, 0.0, 0.03]),
+                           [0.4], self._goal_pos, self._goal2_pos, self._goal_quat])
+    return np.concatenate([obs, goal]).astype(np.float32)
+
+  @property
+  def observation_space(self):
+    return gym.spaces.Box(
+        low=np.full(2 * 14, -np.inf),
+        high=np.full(2 * 14, np.inf),
         dtype=np.float32)
