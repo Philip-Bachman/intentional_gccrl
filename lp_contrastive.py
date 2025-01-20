@@ -65,9 +65,7 @@ def get_program(params):
       repr_dim=config.repr_dim,
       use_image_obs=config.use_image_obs,
       actor_min_std=config.actor_min_std,
-      hidden_layer_sizes=config.hidden_layer_sizes,
-      use_policy_goal_critic=config.use_policy_goal_critic,
-      use_policy_goal_actor=config.use_policy_goal_actor)
+      hidden_layer_sizes=config.hidden_layer_sizes)
   
   # factory for training environments (may sample goals)
   environment_factory = lambda seed: contrastive.make_environment(

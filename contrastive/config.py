@@ -60,8 +60,6 @@ class ContrastiveConfig:
   use_cpc: bool = False
   use_td: bool = False
   use_image_obs: bool = False
-  use_policy_goal_critic: bool = False
-  use_policy_goal_actor: bool = False
   random_goals: int = 1  # switch for how to sample actor training goals
   jit: bool = True
   add_mc_to_td: bool = False

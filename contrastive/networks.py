@@ -90,40 +90,29 @@ def make_networks(
     repr_dim = 64,
     hidden_layer_sizes = (256, 256),
     actor_min_std = 1e-2,
-    use_image_obs = False,
-    use_policy_goal_critic = True,
-    use_policy_goal_actor = True):
+    use_image_obs = False):
   """Creates networks used by the agent."""
   assert (not use_image_obs)  # TODO: patch things up to handle image observations
   action_dim = np.prod(spec.actions.shape, dtype=int)
   TORSO = networks_lib.AtariTorso
 
-  def _unflatten_obs(obs, is_packed=True):
-    state = jnp.reshape(obs[:, :obs_dim], (-1, 64, 64, 3)) / 255.0
-    if is_packed:
-      goal = jnp.reshape(obs[:, obs_dim:], (-1, 64, 64, 3)) / 255.0
-    else:
-      goal = None
-    return state, goal
-
   def _repr_fn(obs_packed, action, pert_goal):
-    # obs_packed : should contain current state and policy goal
+    # obs_packed : should contain current state, goal, and "task mask"
     # action     : should contain action
     # pert_goal  : state we want to predict in the future
     state = obs_packed[:, :obs_dim]
-    policy_goal = obs_packed[:, obs_dim:]
-    if not use_policy_goal_critic:
-      policy_goal = 0. * policy_goal
+    goal = obs_packed[:, obs_dim:(2 * obs_dim)]
+    mask = obs_packed[:, (2 * obs_dim):]
 
     # encoder for (state, action, policy goal)
     sag_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                            out_layer=None, use_ln=True, cold_init=True)
-    sag_repr = sag_encoder(jnp.concatenate([state, action, policy_goal], axis=-1))
+    sag_repr = sag_encoder(jnp.concatenate([state, action, 0. * goal, mask], axis=-1))
 
     # encoder for perturbation goals
     g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                          out_layer=None, use_ln=True, cold_init=True)
-    g_repr = g_encoder(pert_goal)
+    g_repr = g_encoder(mask * pert_goal)
     return sag_repr, g_repr
 
   def _combine_repr(sag_repr, g_repr):
@@ -135,29 +124,15 @@ def make_networks(
     return critic_val, sag_repr, g_repr
 
   def _actor_fn(obs_packed):
-    # input like [state; policy goal] or [state; policy goal; perturbation goal]
-    op_dim = obs_packed.shape[-1]
+    # input like [state; goal; mask]
     state = obs_packed[:, :obs_dim]
-    policy_goal = obs_packed[:, obs_dim:(2 * obs_dim)]
-    if op_dim == (2 * obs_dim):
-      # when observation doesn't include an explicit perturbation goal, we
-      # assume the perturbation and policy goals are the same
-      # -- this should mostly happen when acting in the environment
-      pert_goal = policy_goal
-    elif op_dim == (3 * obs_dim):
-      # packed observation includes a policy goal and a perturbation goal...
-      pert_goal = obs_packed[:, (2 * obs_dim):]
-    else:
-      # packed observation was not shaped properly...
-      assert False
+    goal = obs_packed[:, obs_dim:(2 * obs_dim)]
+    mask = obs_packed[:, (2 * obs_dim):]
 
-    if use_policy_goal_actor:
-      obs_packed = jnp.concatenate([state, policy_goal, pert_goal], axis=-1)
-    else:
-      obs_packed = jnp.concatenate([state, pert_goal, pert_goal], axis=-1)
+    # obs_packed = jnp.concatenate([state, mask, mask * goal], axis=-1)
 
     # full packed input to actor like:
-    # -- [state; policy goal; perturbation goal]
+    # -- [state; mask; masked goal]
     dist_layer = NormalTanhDistribution(
       action_dim, min_scale=actor_min_std, rescale=0.99)
     network = make_mlp(
@@ -174,16 +149,19 @@ def make_networks(
   dummy_action = utils.zeros_like(spec.actions)
   dummy_obs = utils.zeros_like(spec.observations)       # obs is like [state; goal]
   dummy_state = utils.zeros_like(dummy_obs[:obs_dim])
-  dummy_goal = utils.zeros_like(dummy_obs[obs_dim:])
+  dummy_goal = utils.zeros_like(dummy_obs[obs_dim:(2 * obs_dim)])
+  dummy_mask = utils.zeros_like(dummy_obs[(2 * obs_dim):])
   # ...  
   dummy_action = utils.add_batch_dim(dummy_action)
   dummy_state = utils.add_batch_dim(dummy_state)
   dummy_goal = utils.add_batch_dim(dummy_goal)
+  dummy_mask = utils.add_batch_dim(dummy_mask)
+
   # packed observation, as fed to policy by the environment
   # -- observations from environment like [state; policy goal]
   # -- observations during learning like [state; policy goal; perturbation goal]
   # -- differences in observation shapes are handled by the actor network
-  dummy_packed_obs = jnp.concatenate([dummy_state, dummy_goal], axis=-1)
+  dummy_packed_obs = jnp.concatenate([dummy_state, dummy_goal, dummy_mask], axis=-1)
   policy_network = FeedForwardNetwork(
           lambda key: policy.init(key, dummy_packed_obs), policy.apply)
   q_network = FeedForwardNetwork(

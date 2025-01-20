@@ -15,6 +15,7 @@ from acme.wrappers import step_limit
 import dm_env
 import env_utils
 import jax
+import jax.numpy as jnp
 import numpy as np
 import os
 
@@ -80,9 +81,11 @@ class DistanceObserver(observers_base.EnvLoopObserver):
       # if environment doesn't provide a built-in distance metric, then
       # we'll just use simple euclidean distance.
       # -- we assume packed observation like [state; policy goal]
-      obs = timestep.observation[:self._obs_dim]
-      goal = timestep.observation[self._obs_dim:(self._obs_dim + self._goal_dim)]
-      dist = np.linalg.norm(obs - goal)
+      obs_dim = timestep.observation.shape[0] // 3
+      obs = timestep.observation[:obs_dim]
+      goal = timestep.observation[obs_dim:(2 * obs_dim)]
+      mask = timestep.observation[(2 * obs_dim):]
+      dist = np.linalg.norm(mask * (obs - goal))
       return dist
 
   def observe_first(self, env, timestep):

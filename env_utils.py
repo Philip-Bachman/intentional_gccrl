@@ -46,7 +46,7 @@ def load(env_name, fixed_goal=None):
   # Disable type checking in line below because different environments have
   # different kwargs, which pytype doesn't reason about.
   gym_env = CLASS(**kwargs)  # pytype: disable=wrong-keyword-args
-  obs_dim = gym_env.observation_space.shape[0] // 2
+  obs_dim = gym_env.observation_space.shape[0] // 3
   return gym_env, obs_dim, max_episode_steps
 
 
@@ -280,6 +280,28 @@ class SawyerBox2(
   """Wrapper for the SawyerBox environment."""
 
   def __init__(self, fixed_goal=None):
+    # config for multitask learning
+    # make masks to keep/remove some goal coordinates
+    # goal format like:
+    # [hand xyz; grip dist; box lid xyz; cube xyz; box lid quat]
+    msk_xyz = np.ones((3,))
+    msk_quat = np.ones((4,))
+    msk_grip = np.ones((1,))
+    self.goal_mask_all = np.concatenate([
+      msk_xyz, msk_grip, msk_xyz, msk_xyz, msk_quat
+    ]).astype(np.float32)  # try to match all coords
+    self.goal_mask_lid = np.concatenate([
+      msk_xyz, 0 * msk_grip, msk_xyz, 0 * msk_xyz, msk_quat
+    ]).astype(np.float32)  # try to match only lid coords
+    self.goal_mask_cube = np.concatenate([
+      msk_xyz, 0 * msk_grip, 0 * msk_xyz, msk_xyz, 0 * msk_quat
+    ]).astype(np.float32)  # try to match only cube coords
+    #
+    # vvv SET THE CURRENT TASK WITH THIS vvv
+    #
+    self.current_task = 'lid'
+
+    # ...
     self._goal_pos = np.zeros(3)
     self._goal2_pos= np.zeros(3)
     self._goal_quat = np.zeros(4)
@@ -291,8 +313,8 @@ class SawyerBox2(
     self._freeze_rand_vec2 = False
     dummy_obs = self.reset()
     # make obs_dim and goal_dim easily accessible
-    self.obs_dim = dummy_obs.shape[0] // 2
-    self.goal_dim = dummy_obs.shape[0] // 2
+    self.obs_dim = dummy_obs.shape[0] // 3
+    self.goal_dim = dummy_obs.shape[0] // 3
 
   def reset(self):
     super(SawyerBox2, self).reset()
@@ -313,25 +335,45 @@ class SawyerBox2(
     # self._target_pos : goal xyz for box lid
     #
     self._goal_quat = np.array([0.707, 0, 0, 0.707])
-    self._goal2_pos = self._goal_pos + np.array([0, 0, -0.11])
-    self._target_pos = self._goal_pos    
+    self._goal2_pos = self._goal_pos - np.array([0, 0, 0.1])
+    self._target_pos = self._goal_pos
+    # print('********************')
+    # print('self._goal_pos: {}'.format(self._goal_pos))
+    # print('self._goal2_pos: {}'.format(self._goal2_pos))
+    # print('********************')
+    # print('self.get_body_com[top_link]: {}'.format(self.get_body_com('top_link')))
+    # print('self.get_body_com[objC]: {}'.format(self.get_body_com('objC')))
+    # print('self.get_body_com[boxbody]: {}'.format(self.get_body_com('boxbody')))
+    # print('********************')
+    # print('dir(self):')
+    # print('{}'.format(dir(self)))
+    # print('********************')
+    # print('{}'.format(dir(self.model)))
+    # print('********************')
     return self._get_obs()
 
   def step(self, action):
     super(SawyerBox2, self).step(action)
-    obj_pos = self._get_pos_objects()
-    obj2_pos = self._get_pos_objects2()
-    obj_quat = self._get_quat_objects()
+    obj_pos = self._get_pos_objects('top_link')
+    obj2_pos = self._get_pos_objects('objC')
+    obj_quat = self._get_quat_objects('top_link')
     
     dist_pos = np.linalg.norm(self._goal_pos - obj_pos)
     dist_pos2 = np.linalg.norm(self._goal2_pos - obj2_pos)
     dist_quat = np.linalg.norm(self._goal_quat - obj_quat)
-    
+
+    if self.current_task == 'cube':
+      r = float(dist_pos2 < 0.1)  # Taken from metaworld
+    elif self.current_task == 'lid':
+      r = float(dist_pos < 0.1 and dist_quat < 0.08)
+    elif self.current_task == 'all':
+      r = float((dist_pos + dist_pos2) < 0.16 and dist_quat < 0.08)
+    else:
+      assert False
+
     obs = self._get_obs()
-    r = float((dist_pos + dist_pos2) < 0.16 and dist_quat < 0.08)  # Taken from metaworld
     done = False
     info = {}
-    
     return obs, r, done, info
 
   def _get_obs(self):
@@ -343,10 +385,10 @@ class SawyerBox2(
     gripper_distance_apart = np.linalg.norm(finger_right - finger_left)
     gripper_distance_apart = np.clip(gripper_distance_apart / 0.1, 0., 1.)
     
-    obj_pos = self._get_pos_objects()
-    obj2_pos = self._get_pos_objects2()
-    obj_quat = self._get_quat_objects()
-    
+    obj_pos = self._get_pos_objects('top_link')
+    obj2_pos = self._get_pos_objects('objC')
+    obj_quat = self._get_quat_objects('top_link')
+
     # obs[0:3]   = hand position xyz
     # obs[3:4]   = gripper distance apart
     # obs[4:7]   = box lid position xyz
@@ -356,11 +398,20 @@ class SawyerBox2(
                           obj_pos, obj2_pos, obj_quat))
     goal = np.concatenate([self._goal_pos + np.array([0.0, 0.0, 0.03]),
                            [0.4], self._goal_pos, self._goal2_pos, self._goal_quat])
-    return np.concatenate([obs, goal]).astype(np.float32)
+    # get mask for the current task
+    if self.current_task == 'cube':
+      mask = self.goal_mask_cube
+    elif self.current_task == 'lid':
+      mask = self.goal_mask_lid
+    elif self.current_task == 'all':
+      mask = self.goal_mask_all
+    else:
+      assert False
+    return np.concatenate([obs, goal, mask]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(2 * 14, -np.inf),
-        high=np.full(2 * 14, np.inf),
+        low=np.full(3 * 14, -np.inf),
+        high=np.full(3 * 14, np.inf),
         dtype=np.float32)
