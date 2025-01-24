@@ -140,8 +140,8 @@ class NormalTanhDistribution(hk.Module):
     self._rescale = tfp.bijectors.Scale(scale=rescale)
 
   def __call__(self, inputs: jnp.ndarray) -> tfd.Distribution:
-    # loc = value_decay(self._loc_layer(inputs))
-    loc = self._loc_layer(inputs)
+    loc = value_decay(self._loc_layer(inputs))
+    # loc = self._loc_layer(inputs)
     # scale = value_decay(self._scale_layer(inputs))
     # scale = self._min_scale + (0. * loc)
     scale = self._scale_layer(inputs)

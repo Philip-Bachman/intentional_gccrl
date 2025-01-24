@@ -100,39 +100,44 @@ def make_networks(
     # obs_packed : should contain current state, goal, and "task mask"
     # action     : should contain action
     # pert_goal  : state we want to predict in the future
-    state = obs_packed[:, :obs_dim]
-    goal = obs_packed[:, obs_dim:(2 * obs_dim)]
     mask = obs_packed[:, (2 * obs_dim):]
 
     # encoder for (state, action, policy goal)
     sag_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                            out_layer=None, use_ln=True, cold_init=True)
-    sag_repr = sag_encoder(jnp.concatenate([state, action, 0. * goal, mask], axis=-1))
+    sag_repr = sag_encoder(jnp.concatenate([obs_packed, action], axis=-1))
 
     # encoder for perturbation goals
     g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                          out_layer=None, use_ln=True, cold_init=True)
-    g_repr = g_encoder(mask * pert_goal)
-    return sag_repr, g_repr
+    genc_input_a = jnp.concatenate([mask, jnp.ones_like(mask)], axis=0)
+    genc_input_b = jnp.concatenate([mask * pert_goal, pert_goal], axis=0)
+    g_repr_joint = g_encoder(jnp.concatenate([genc_input_a, genc_input_b], axis=1))
+    g_repr = g_repr_joint[:mask.shape[0], :]
+    g_repr_full = g_repr_joint[mask.shape[0]:, :]
+    return sag_repr, g_repr, g_repr_full
 
   def _combine_repr(sag_repr, g_repr):
     return jax.numpy.einsum('ik,jk->ij', sag_repr, g_repr)
 
   def _critic_fn(obs_packed, action, pert_goal):
-    sag_repr, g_repr = _repr_fn(obs_packed, action, pert_goal)
+    sag_repr, g_repr, g_repr_full = \
+      _repr_fn(obs_packed, action, pert_goal)
     critic_val = _combine_repr(sag_repr, g_repr)
-    return critic_val, sag_repr, g_repr
+    critic_val_full = _combine_repr(sag_repr, g_repr_full)
+    return critic_val, critic_val_full, sag_repr, g_repr, g_repr_full
 
   def _actor_fn(obs_packed):
     # input like [state; goal; mask]
-    state = obs_packed[:, :obs_dim]
     goal = obs_packed[:, obs_dim:(2 * obs_dim)]
-    mask = obs_packed[:, (2 * obs_dim):]
 
-    # obs_packed = jnp.concatenate([state, mask, mask * goal], axis=-1)
+    in_dim = obs_packed.shape[1]
+    assert (in_dim == (3 * obs_dim)) or (in_dim == (4 * obs_dim))
+    if in_dim == (3 * obs_dim):
+      obs_packed = jnp.concatenate([obs_packed, goal], axis=1)
 
     # full packed input to actor like:
-    # -- [state; mask; masked goal]
+    # -- [state; goal; mask; pert_goal]
     dist_layer = NormalTanhDistribution(
       action_dim, min_scale=actor_min_std, rescale=0.99)
     network = make_mlp(

@@ -25,7 +25,7 @@ class ContrastiveConfig:
   use_env_goal: bool = True
     
   # Loss options
-  batch_size: int = 256
+  batch_size: int = 384
   learning_rate: float = 3e-4
   reward_scale: float = 1
   discount: float = 0.99

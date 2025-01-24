@@ -159,7 +159,7 @@ class FancyEnvironmentLoop(core.Worker):
     new_buffer = collections.deque(maxlen=self._frame_buffer.maxlen)
     # set parameters for video writer/rendering
     fps, height, width = 30, 480, 640  # Frames per second
-    output_path = 'video_box2_actor_sgcrl_555_eps_{}.avi'.format(counts['actor_episodes'])
+    output_path = 'video_box2_actor_sgcrl_888_eps_{}.avi'.format(counts['actor_episodes'])
     fourcc = cv2.VideoWriter_fourcc(*'XVID')  # Codec (e.g., 'XVID', 'mp4v', etc.)
     # create VideoWriter object
     video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
@@ -200,7 +200,7 @@ class FancyEnvironmentLoop(core.Worker):
 
     # decide whether to sample a goal for this episode from the local buffer
     if (len(self._goal_buffer) > self._rb_warmup):
-      if (not self._use_env_goal) and (np.random.rand() < 0.5):
+      if (not self._use_env_goal) and (np.random.rand() < 0.8):
         episode_rnd_goal = self._goal_buffer.sample(1)[0]
         timestep = self._set_goal(timestep, episode_rnd_goal)
 

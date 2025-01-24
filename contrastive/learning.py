@@ -37,6 +37,7 @@ class TrainingState(NamedTuple):
   q_params: networks_lib.Params
   target_q_params: networks_lib.Params
   key: networks_lib.PRNGKey
+  learner_steps: int
 
 
 class ContrastiveLearner(acme.Learner):
@@ -84,7 +85,7 @@ class ContrastiveLearner(acme.Learner):
         policy_params,
         target_q_params,
         transitions,
-        key
+        key,
     ):
       batch_size = transitions.observation.shape[0]
       # Note: We might be able to speed up the computation for some of the
@@ -102,14 +103,15 @@ class ContrastiveLearner(acme.Learner):
       obs_packed = jnp.concatenate([state, policy_goal], axis=1)
 
       # compute logits for use in infonce loss
-      logits, _, _ = networks.q_network.apply(q_params, obs_packed, action, pert_goal)
+      logits, logits_full, sag_repr, g_repr, g_repr_full = \
+        networks.q_network.apply(q_params, obs_packed, action, pert_goal)
 
       def loss_fn(_logits):
         loss_nce = optax.softmax_cross_entropy(logits=_logits, labels=I)
         loss_reg = jax.nn.logsumexp(_logits, axis=1)**2
         return loss_nce + 0.01 * loss_reg
 
-      loss = loss_fn(logits)
+      loss = loss_fn(logits) + loss_fn(logits_full)
       loss = jnp.mean(loss)
       correct = (jnp.argmax(logits, axis=1) == jnp.argmax(I, axis=1))
       logits_pos = jnp.sum(logits * I) / jnp.sum(I)
@@ -139,6 +141,7 @@ class ContrastiveLearner(acme.Learner):
       # pert_goal   : discounted future state
       # policy_goal : goal of policy that produced this (state, future state) pair
       state = transitions.extras['state_current']
+      goal = transitions.extras['policy_goal'][:, self._obs_dim:]
       mask = transitions.extras['policy_goal'][:, self._obs_dim:]
       pert_goal = transitions.extras['state_future']
       
@@ -146,24 +149,26 @@ class ContrastiveLearner(acme.Learner):
 
       # train actor 50/50 on intra-episode future states and random states
       train_state = jnp.concatenate([state, state], axis=0)
+      train_goal = jnp.concatenate([goal, goal], axis=0)
       train_mask = jnp.concatenate([mask, mask], axis=0)
       train_pert_goal = jnp.concatenate([pert_goal, pert_goal_shuffled], axis=0)
 
-      obs_packed = jnp.concatenate([train_state, train_pert_goal, train_mask], axis=-1)
-      dist_params = networks.policy_network.apply(policy_params, obs_packed)
+      obs_packed = jnp.concatenate([train_state, train_goal, train_mask], axis=-1)
+      policy_input = jnp.concatenate([obs_packed, train_pert_goal], axis=1)
+      dist_params = networks.policy_network.apply(policy_params, policy_input)
       action = networks.sample(dist_params, key)
       action_log_prob = networks.log_prob(dist_params, action)
 
       # compute loss for optimizing goal-conditioned actor
-      q_action, _, g_repr = networks.q_network.apply(
-        q_params, obs_packed, action, train_pert_goal)
+      q_action, q_action_full, sag_repr, g_repr, g_repr_full = \
+        networks.q_network.apply(q_params, obs_packed, action, train_pert_goal)
       actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
 
       # action entropy loss
       approx_entropy = -action_log_prob
 
-      if config.use_action_entropy:
-        actor_loss -= alpha * approx_entropy # negative -(-log prob): maximize entropy
+      if True:  # config.use_action_entropy:
+        actor_loss -= 0.002 * approx_entropy # negative -(-log prob): maximize entropy
 
       # split up actor loss into chunks with different meaning
       chunk_size = actor_loss.shape[0] // 2
@@ -248,8 +253,9 @@ class ContrastiveLearner(acme.Learner):
           target_policy_params=new_target_policy_params,
           q_params=q_params,
           target_q_params=new_target_q_params,
-          key=key
-      )    
+          key=key,
+          learner_steps=(state.learner_steps + 1)
+      )
       return new_state, metrics
 
     # setup function for performing multiple update steps
@@ -277,7 +283,8 @@ class ContrastiveLearner(acme.Learner):
           target_policy_params=policy_params,
           q_params=q_params,
           target_q_params=q_params,
-          key=key
+          key=key,
+          learner_steps=0
       )
       return state
 

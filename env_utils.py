@@ -4,6 +4,7 @@ from __future__ import division
 from __future__ import print_function
 
 import os
+import random
 
 import gym
 import metaworld
@@ -291,15 +292,16 @@ class SawyerBox2(
       msk_xyz, msk_grip, msk_xyz, msk_xyz, msk_quat
     ]).astype(np.float32)  # try to match all coords
     self.goal_mask_lid = np.concatenate([
-      msk_xyz, 0 * msk_grip, msk_xyz, 0 * msk_xyz, msk_quat
+      msk_xyz, msk_grip, msk_xyz, 0 * msk_xyz, msk_quat
     ]).astype(np.float32)  # try to match only lid coords
     self.goal_mask_cube = np.concatenate([
-      msk_xyz, 0 * msk_grip, 0 * msk_xyz, msk_xyz, 0 * msk_quat
+      msk_xyz, msk_grip, 0 * msk_xyz, msk_xyz, 0 * msk_quat
     ]).astype(np.float32)  # try to match only cube coords
     #
     # vvv SET THE CURRENT TASK WITH THIS vvv
     #
-    self.current_task = 'lid'
+    self.current_task = 'all'
+    self.task_list = ['cube']  # , 'lid']
 
     # ...
     self._goal_pos = np.zeros(3)
@@ -350,6 +352,7 @@ class SawyerBox2(
     # print('********************')
     # print('{}'.format(dir(self.model)))
     # print('********************')
+    self.current_task = random.choice(self.task_list)
     return self._get_obs()
 
   def step(self, action):
