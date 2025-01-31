@@ -11,7 +11,6 @@ hk_init = hk.initializers
 tfp = tensorflow_probability.substrates.jax
 tfd = tfp.distributions
 
-_MIN_SCALE = 1e-4
 Initializer = hk.initializers.Initializer
 
 
@@ -140,8 +139,8 @@ class NormalTanhDistribution(hk.Module):
     self._rescale = tfp.bijectors.Scale(scale=rescale)
 
   def __call__(self, inputs: jnp.ndarray) -> tfd.Distribution:
-    loc = value_decay(self._loc_layer(inputs))
-    # loc = self._loc_layer(inputs)
+    # loc = value_decay(self._loc_layer(inputs))
+    loc = self._loc_layer(inputs)
     # scale = value_decay(self._scale_layer(inputs))
     # scale = self._min_scale + (0. * loc)
     scale = self._scale_layer(inputs)
@@ -150,22 +149,4 @@ class NormalTanhDistribution(hk.Module):
     distribution = TanhTransformedDistribution(distribution)
     distribution = tfd.TransformedDistribution(distribution, self._rescale)
     return tfd.Independent(distribution, reinterpreted_batch_ndims=1)
-
-
-class CategoricalValueHead(hk.Module):
-  """Network head that produces a categorical distribution and value."""
-
-  def __init__(
-      self,
-      num_values: int,
-      name: Optional[str] = None,
-  ):
-    super().__init__(name=name)
-    self._logit_layer = hk.Linear(num_values)
-    self._value_layer = hk.Linear(1)
-
-  def __call__(self, inputs: jnp.ndarray):
-    logits = self._logit_layer(inputs)
-    value = jnp.squeeze(self._value_layer(inputs), axis=-1)
-    return (tfd.Categorical(logits=logits), value)
 

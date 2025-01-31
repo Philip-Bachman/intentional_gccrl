@@ -99,12 +99,14 @@ class ContrastiveLearner(acme.Learner):
       policy_goal = transitions.extras['policy_goal']  # packed like [goal; mask]
       pert_goal = transitions.extras['state_future']   # state we perturb towards
       action = transitions.action
-
       obs_packed = jnp.concatenate([state, policy_goal], axis=1)
+
+      # ...
+      key, q_key = jax.random.split(key)
 
       # compute logits for use in infonce loss
       logits, logits_full, sag_repr, g_repr, g_repr_full = \
-        networks.q_network.apply(q_params, obs_packed, action, pert_goal)
+        networks.q_network.apply(q_params, q_key, obs_packed, action, pert_goal)
 
       def loss_fn(_logits):
         loss_nce = optax.softmax_cross_entropy(logits=_logits, labels=I)
@@ -144,8 +146,10 @@ class ContrastiveLearner(acme.Learner):
       goal = transitions.extras['policy_goal'][:, self._obs_dim:]
       mask = transitions.extras['policy_goal'][:, self._obs_dim:]
       pert_goal = transitions.extras['state_future']
-      
       pert_goal_shuffled = jnp.roll(pert_goal, 1, axis=0)
+
+      # ...
+      key, p_key, q_key = jax.random.split(key, 3)
 
       # train actor 50/50 on intra-episode future states and random states
       train_state = jnp.concatenate([state, state], axis=0)
@@ -155,20 +159,20 @@ class ContrastiveLearner(acme.Learner):
 
       obs_packed = jnp.concatenate([train_state, train_goal, train_mask], axis=-1)
       policy_input = jnp.concatenate([obs_packed, train_pert_goal], axis=1)
-      dist_params = networks.policy_network.apply(policy_params, policy_input)
+      dist_params = networks.policy_network.apply(policy_params, p_key, policy_input)
       action = networks.sample(dist_params, key)
       action_log_prob = networks.log_prob(dist_params, action)
 
       # compute loss for optimizing goal-conditioned actor
       q_action, q_action_full, sag_repr, g_repr, g_repr_full = \
-        networks.q_network.apply(q_params, obs_packed, action, train_pert_goal)
+        networks.q_network.apply(q_params, q_key, obs_packed, action, train_pert_goal)
       actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
 
       # action entropy loss
       approx_entropy = -action_log_prob
 
-      if True:  # config.use_action_entropy:
-        actor_loss -= 0.002 * approx_entropy # negative -(-log prob): maximize entropy
+      if config.use_action_entropy:
+        actor_loss -= 0.000 * approx_entropy # negative -(-log prob): maximize entropy
 
       # split up actor loss into chunks with different meaning
       chunk_size = actor_loss.shape[0] // 2

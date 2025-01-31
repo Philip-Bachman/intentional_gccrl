@@ -203,7 +203,7 @@ class ContrastiveDistributedLayout:
         utils.sample_uint32(environment_key))
     # create networks
     networks = self._network_factory(self._dummy_environment_spec)
-    policy_fn = apply_policy_and_sample(networks)
+    policy_fn = apply_policy_and_sample(networks, eval_mode=False)
     actor = self._builder.make_actor(
       actor_key, policy_fn, variable_source, rb_adder=rb_adder
     )
@@ -234,7 +234,7 @@ class ContrastiveDistributedLayout:
       utils.sample_uint32(environment_key))
     # crate networks
     networks = self._network_factory(self._dummy_environment_spec)
-    policy_fn = apply_policy_and_sample(networks, True)
+    policy_fn = apply_policy_and_sample(networks, eval_mode=True)
     actor = self._builder.make_actor(
       actor_key, policy_fn, variable_source
     )

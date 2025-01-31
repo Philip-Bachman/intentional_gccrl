@@ -44,7 +44,8 @@ def apply_policy_and_sample(
     raise ValueError('sample function is not provided')
 
   def apply_and_sample(params, key, obs):
-    return sample_fn(networks.policy_network.apply(params, obs), key)
+    key, key_a, key_s = jax.random.split(key, 3)
+    return sample_fn(networks.policy_network.apply(params, key_a, obs), key_s)
   return apply_and_sample
 
 
@@ -96,16 +97,25 @@ def make_networks(
   action_dim = np.prod(spec.actions.shape, dtype=int)
   TORSO = networks_lib.AtariTorso
 
+  def _info_fuzz(x, blend):
+    rng_key = hk.next_rng_key()
+    fuzz = 0.1 * jax.random.normal(rng_key, shape=x.shape, dtype=x.dtype)
+    x_fuzz = (blend * x) + ((1 - blend) * fuzz)
+    return x_fuzz
+
   def _repr_fn(obs_packed, action, pert_goal):
     # obs_packed : should contain current state, goal, and "task mask"
     # action     : should contain action
     # pert_goal  : state we want to predict in the future
+    state = obs_packed[:, :obs_dim]
+    goal = obs_packed[:, obs_dim:(2 * obs_dim)]
     mask = obs_packed[:, (2 * obs_dim):]
 
     # encoder for (state, action, policy goal)
     sag_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                            out_layer=None, use_ln=True, cold_init=True)
-    sag_repr = sag_encoder(jnp.concatenate([obs_packed, action], axis=-1))
+    sag_repr = sag_encoder(jnp.concatenate([state, 0. * _info_fuzz(goal, 0.),
+                                            mask, action], axis=-1))
 
     # encoder for perturbation goals
     g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
@@ -129,12 +139,18 @@ def make_networks(
 
   def _actor_fn(obs_packed):
     # input like [state; goal; mask]
+    state = obs_packed[:, :obs_dim]
     goal = obs_packed[:, obs_dim:(2 * obs_dim)]
+    mask = obs_packed[:, (2 * obs_dim):(3 * obs_dim)]    
 
     in_dim = obs_packed.shape[1]
     assert (in_dim == (3 * obs_dim)) or (in_dim == (4 * obs_dim))
     if in_dim == (3 * obs_dim):
-      obs_packed = jnp.concatenate([obs_packed, goal], axis=1)
+      pert_goal = goal
+    else:
+      pert_goal = obs_packed[:, (3 * obs_dim):]
+    obs_packed = jnp.concatenate([state, 0. * _info_fuzz(goal, 0.),
+                                  mask, pert_goal], axis=1)
 
     # full packed input to actor like:
     # -- [state; goal; mask; pert_goal]
@@ -144,8 +160,8 @@ def make_networks(
       hidden_layer_sizes, out_size=None, out_layer=dist_layer, use_ln=True)
     return network(obs_packed)
 
-  policy = hk.without_apply_rng(hk.transform(_actor_fn))
-  critic = hk.without_apply_rng(hk.transform(_critic_fn))
+  policy = hk.transform(_actor_fn)
+  critic = hk.transform(_critic_fn)
 
   # create dummy observations and actions to create network parameters.
   # -- it's important to note that the "observation" expected here is a

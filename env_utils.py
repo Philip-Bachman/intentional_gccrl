@@ -301,7 +301,7 @@ class SawyerBox2(
     # vvv SET THE CURRENT TASK WITH THIS vvv
     #
     self.current_task = 'all'
-    self.task_list = ['cube']  # , 'lid']
+    self.task_list = ['cube', 'lid', 'all']
 
     # ...
     self._goal_pos = np.zeros(3)
