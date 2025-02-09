@@ -96,10 +96,10 @@ class ContrastiveLearner(acme.Learner):
 
       # each (state, policy goal, perturbation goal) tuple corresponds to:
       state = transitions.extras['state_current']      # current state
-      policy_goal = transitions.extras['policy_goal']  # packed like [goal; mask]
+      goal_mask_latent = transitions.extras['goal_mask_latent']  # packed like [goal; mask; latent]
       pert_goal = transitions.extras['state_future']   # state we perturb towards
       action = transitions.action
-      obs_packed = jnp.concatenate([state, policy_goal], axis=1)
+      obs_packed = jnp.concatenate([state, goal_mask_latent], axis=1)
 
       # ...
       key, q_key = jax.random.split(key)
@@ -154,9 +154,11 @@ class ContrastiveLearner(acme.Learner):
       # state       : current state
       # pert_goal   : discounted future state
       # policy_goal : goal of policy that produced this (state, future state) pair
+      odim = self._obs_dim
       state = transitions.extras['state_current']
-      goal = transitions.extras['policy_goal'][:, self._obs_dim:]
-      mask = transitions.extras['policy_goal'][:, self._obs_dim:]
+      goal = transitions.extras['goal_mask_latent'][:, :odim]
+      mask = transitions.extras['goal_mask_latent'][:, odim:(2 * odim)]
+      latent = transitions.extras['goal_mask_latent'][:, (2 * odim):(3 * odim)]
       pert_goal = transitions.extras['state_future']
       pert_goal_shuffled = jnp.roll(pert_goal, 1, axis=0)
 

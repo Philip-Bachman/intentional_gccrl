@@ -154,7 +154,7 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
 
       # grab the goal that was conditioned on in this episode
       # -- goal should be constant through an episode
-      policy_goal = sample.data.observation[:-1, self._config.obs_dim:]
+      goal_mask_latent = sample.data.observation[:-1, self._config.obs_dim:]
 
       # grab states from the discounted future of each state
       future_state = sample.data.observation[:, :self._config.obs_dim]
@@ -172,7 +172,7 @@ class ContrastiveBuilder(builders.ActorLearnerBuilder):
           extras={
               'state_current': state,
               'state_future': future_state,
-              'policy_goal': policy_goal
+              'goal_mask_latent': goal_mask_latent
           })
       # shuffle sequence order here to make the transpose shuffle work later
       shift = tf.random.uniform((), 0, seq_len, tf.int32)

@@ -130,31 +130,29 @@ def make_networks(
   action_dim = np.prod(spec.actions.shape, dtype=int)
   TORSO = networks_lib.AtariTorso
 
-  def _info_fuzz(x, blend):
-    rng_key = hk.next_rng_key()
-    fuzz = 0.1 * jax.random.normal(rng_key, shape=x.shape, dtype=x.dtype)
-    x_fuzz = (blend * x) + ((1 - blend) * fuzz)
-    return x_fuzz
-
   def _repr_fn(obs_packed, action, pert_goal):
-    # obs_packed : should contain current state, goal, and "task mask"
-    # action     : should contain action
-    # pert_goal  : state we want to predict in the future
+    # obs_packed : [state; goal; mask; latent] -- basically, actor's input
+    # action     : [action] -- action, obviously
+    # pert_goal  : [goal] -- future goal/state we want to predict
     state = obs_packed[:, :obs_dim]
     goal = obs_packed[:, obs_dim:(2 * obs_dim)]
-    mask = obs_packed[:, (2 * obs_dim):]
+    mask = obs_packed[:, (2 * obs_dim):(3 * obs_dim)]
+    latent = obs_packed[:, (3 * obs_dim):(4 * obs_dim)]
 
-    # encoder for (state, action, policy goal)
+    # encoder for (state, action, goal, mask)
+    # -- mask indicates which dims of goal are relevant
+    # -- TODO: test if/when conditioning on goal can work...
     sag_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                            out_layer=None)
-    sag_repr = sag_encoder(jnp.concatenate([state, 0. * _info_fuzz(goal, 0.),
-                                            mask, action], axis=-1))
+    sag_input = jnp.concatenate([state, action, 0. * goal, mask], axis=-1)
+    sag_repr = sag_encoder(sag_input)
 
     # encoder for perturbation goals
+    # -- mask out dims that aren't relevant to the task/mask
     g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                          out_layer=None)
-    genc_input = jnp.concatenate([mask, mask * pert_goal], axis=1)
-    g_repr = g_encoder(genc_input)
+    g_input = jnp.concatenate([mask, mask * pert_goal], axis=1)
+    g_repr = g_encoder(g_input)
     return sag_repr, g_repr
 
   def _combine_repr(sag_repr, g_repr):
@@ -167,22 +165,9 @@ def make_networks(
     return critic_val, sag_repr, g_repr
 
   def _actor_fn(obs_packed):
-    # input like [state; goal; mask]
-    state = obs_packed[:, :obs_dim]
-    goal = obs_packed[:, obs_dim:(2 * obs_dim)]
-    mask = obs_packed[:, (2 * obs_dim):(3 * obs_dim)]    
-
-    in_dim = obs_packed.shape[1]
-    assert (in_dim == (3 * obs_dim)) or (in_dim == (4 * obs_dim))
-    if in_dim == (3 * obs_dim):
-      pert_goal = goal
-    else:
-      pert_goal = obs_packed[:, (3 * obs_dim):]
-    obs_packed = jnp.concatenate([state, 0. * _info_fuzz(goal, 0.),
-                                  mask, pert_goal], axis=1)
-
-    # full packed input to actor like:
-    # -- [state; goal; mask; pert_goal]
+    # packed input like: [state; goal; mask; latent]
+    assert (obs_packed.shape[1] == (4 * obs_dim))
+    # apply actor network to input
     dist_layer = NormalTanhDistribution(
       action_dim, min_scale=actor_min_std, rescale=0.99)
     network = make_mlp(hidden_layer_sizes, out_size=None,
@@ -197,25 +182,29 @@ def make_networks(
   #    "packed" observation that includes both a current environment state
   #    and a future goal state of the same form as the current state.
   dummy_action = utils.zeros_like(spec.actions)
-  dummy_obs = utils.zeros_like(spec.observations)       # obs is like [state; goal]
+  dummy_obs = utils.zeros_like(spec.observations)   # obs is like [state; goal]
   dummy_state = utils.zeros_like(dummy_obs[:obs_dim])
   dummy_goal = utils.zeros_like(dummy_obs[obs_dim:(2 * obs_dim)])
-  dummy_mask = utils.zeros_like(dummy_obs[(2 * obs_dim):])
+  dummy_mask = utils.zeros_like(dummy_goal)
+  dummy_latent = utils.zeros_like(dummy_goal)
   # ...  
-  dummy_action = utils.add_batch_dim(dummy_action)
   dummy_state = utils.add_batch_dim(dummy_state)
+  dummy_action = utils.add_batch_dim(dummy_action)
   dummy_goal = utils.add_batch_dim(dummy_goal)
   dummy_mask = utils.add_batch_dim(dummy_mask)
+  dummy_latent = utils.add_batch_dim(dummy_latent)
 
   # packed observation, as fed to policy by the environment
   # -- observations from environment like [state; policy goal]
   # -- observations during learning like [state; policy goal; perturbation goal]
   # -- differences in observation shapes are handled by the actor network
-  dummy_packed_obs = jnp.concatenate([dummy_state, dummy_goal, dummy_mask], axis=-1)
+  dummy_packed_obs = jnp.concatenate([dummy_state, dummy_goal,
+                                      dummy_mask, dummy_latent], axis=-1)
   policy_network = FeedForwardNetwork(
           lambda key: policy.init(key, dummy_packed_obs), policy.apply)
   q_network = FeedForwardNetwork(
-          lambda key: critic.init(key, dummy_packed_obs, dummy_action, dummy_goal), critic.apply)
+          lambda key: critic.init(key, dummy_packed_obs,
+                                  dummy_action, dummy_goal), critic.apply)
 
   return ContrastiveNetworks(
       policy_network=policy_network,
