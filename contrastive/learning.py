@@ -105,16 +105,26 @@ class ContrastiveLearner(acme.Learner):
       key, q_key = jax.random.split(key)
 
       # compute logits for use in infonce loss
-      logits, logits_full, sag_repr, g_repr, g_repr_full = \
+      logits, sag_repr, g_repr = \
         networks.q_network.apply(q_params, q_key, obs_packed, action, pert_goal)
 
       def loss_fn(_logits):
+        # compute infonce loss + logsumexp regularization (on partition func)
         loss_nce = optax.softmax_cross_entropy(logits=_logits, labels=I)
         loss_reg = jax.nn.logsumexp(_logits, axis=1)**2
         return loss_nce + 0.01 * loss_reg
+      
+      def norm_loss(_vecs):
+        # compute a softmaximum-based norm loss for these vecs
+        _vecs_sq = jnp.sum(_vecs ** 2, axis=1)  # should return a 1d array
+        _vecs_sq_smax = jax.nn.softmax(_vecs_sq)
+        loss_norm = jnp.sum(_vecs_sq * _vecs_sq_smax)
+        return loss_norm
 
-      loss = loss_fn(logits) + loss_fn(logits_full)
-      loss = jnp.mean(loss)
+      loss_nce = loss_fn(logits)
+      loss_norm_sag = norm_loss(sag_repr)
+      loss_norm_g = norm_loss(g_repr)
+      loss = jnp.mean(loss_nce) + 0.0001 * (loss_norm_sag + loss_norm_g)
       correct = (jnp.argmax(logits, axis=1) == jnp.argmax(I, axis=1))
       logits_pos = jnp.sum(logits * I) / jnp.sum(I)
       logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
@@ -127,6 +137,8 @@ class ContrastiveLearner(acme.Learner):
           'logits_pos': logits_pos,
           'logits_neg': logits_neg,
           'logsumexp': logsumexp.mean(),
+          'loss_norm_sag': loss_norm_sag,
+          'loss_norm_g': loss_norm_g
       }
       return loss, metrics
 
@@ -164,7 +176,7 @@ class ContrastiveLearner(acme.Learner):
       action_log_prob = networks.log_prob(dist_params, action)
 
       # compute loss for optimizing goal-conditioned actor
-      q_action, q_action_full, sag_repr, g_repr, g_repr_full = \
+      q_action, sag_repr, g_repr = \
         networks.q_network.apply(q_params, q_key, obs_packed, action, train_pert_goal)
       actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
 
@@ -226,7 +238,7 @@ class ContrastiveLearner(acme.Learner):
       new_target_q_params = jax.tree_map(lambda x, y: x * (1 - config.tau) + y * config.tau, 
                                          state.target_q_params, q_params)
       # ...
-      clip_actor_norm = optax.clip_by_global_norm(1.0)
+      clip_actor_norm = optax.clip_by_global_norm(10.0)
       actor_grads_clipped, policy_optimizer_state = clip_actor_norm.update(
         actor_grads, state.policy_optimizer_state
       )

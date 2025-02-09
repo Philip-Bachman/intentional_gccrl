@@ -49,38 +49,71 @@ def apply_policy_and_sample(
   return apply_and_sample
 
 
+def hk_linear_layer(n_hidden, init_scale=1.0):
+  w_init = hk.initializers.VarianceScaling(init_scale, 'fan_avg', 'uniform')
+  return hk.Linear(n_hidden, w_init=w_init)
+
+
+class MlpLayer(hk.Module):
+  """Simple haiku compatible mlp layer -- basic dense or residualish."""
+  def __init__(self,
+               n_hidden: int,
+               layer_type: str
+               ):
+    assert (layer_type in ['dense', 'residual'])
+    super().__init__()
+    self.layer_type = layer_type
+    block_layers = []
+
+    if layer_type == 'dense':
+      # dense block like: x = relu(ln(linear(x)))
+      block_layers.append(hk_linear_layer(n_hidden, 1.0))
+      block_layers.append(hk.LayerNorm(-1, True, True))
+      block_layers.append(jax.nn.relu)
+    else:
+      # residual block like: x = x + linear(relu(linear(ln(x))))
+      block_layers.append(hk.LayerNorm(-1, True, True))
+      block_layers.append(hk_linear_layer(n_hidden, 1.0))
+      block_layers.append(jax.nn.relu)
+      block_layers.append(hk_linear_layer(n_hidden, 1.0))
+    self.block = hk.Sequential(block_layers)
+
+  def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+    if self.layer_type == 'dense':
+      x = self.block(x)
+    else:
+      x = x + self.block(x)
+    return x
+
+
 def make_mlp(
     hidden_layer_sizes,
     out_size=None,
     out_layer=None,
-    use_ln=True,
-    cold_init=True
+    simba=True
 ):
-  assert (out_size is None) or (out_layer is None)         # this is just a simple function :-(
-  assert not ((out_size is None) and (out_layer is None))  # this is just a simple function :-(
-  # make mlp with given hidden layer sizes and output size,
-  # with optional layernorm after each non-final linear layer.
-  layer_sizes = hidden_layer_sizes
-  is_final = [False for s in hidden_layer_sizes]
-  if out_size is not None:
-    layer_sizes = layer_sizes + (out_size,)
-    is_final = is_final + [True]
+  # user should provide either out_size or out_layer
+  assert (out_size is None) or (out_layer is None)
+  assert not ((out_size is None) and (out_layer is None))
+  # construct the mlp
   layer_list = []
-  for l_sz, is_f in zip(layer_sizes, is_final):
-    if is_f and cold_init and (out_layer is None):
-      # this should be for final layers in the critic
-      layer_list.append(hk.Linear(l_sz, w_init=hk.initializers.VarianceScaling(1e-1, 'fan_avg', 'uniform')))
+  if simba:
+    # start with linear transform and layernorm
+    layer_list.append(hk_linear_layer(hidden_layer_sizes[0], 1.0))
+  # add hidden layers (same for actor and critic)
+  for l_sz in hidden_layer_sizes:
+    if simba:
+      layer_list.append(MlpLayer(l_sz, layer_type='residual'))
     else:
-      # this should be for hidden layers in the actor and critic
-      layer_list.append(hk.Linear(l_sz, w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform')))
-    # add normalization and non-linearity on hidden layers
-    if not is_f:
-      if use_ln:
-        layer_list.append(hk.LayerNorm(-1, True, True))
-      layer_list.append(jax.nn.relu)
-  # add an extra output layer for the actor (probably tfd distribution)
-  if out_layer is not None:
+      layer_list.append(MlpLayer(l_sz, layer_type='dense'))
+  if simba:
+    layer_list.append(hk.LayerNorm(-1, True, True))
+  # add final layers (different for actor and critic)
+  if (out_layer is None):
+    layer_list.append(hk_linear_layer(out_size, 0.1))
+  else:
     layer_list.append(out_layer)
+  # mash layers together into a haiku network
   mlp = hk.Sequential(layer_list)
   return mlp
 
@@ -113,29 +146,25 @@ def make_networks(
 
     # encoder for (state, action, policy goal)
     sag_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
-                           out_layer=None, use_ln=True, cold_init=True)
+                           out_layer=None)
     sag_repr = sag_encoder(jnp.concatenate([state, 0. * _info_fuzz(goal, 0.),
                                             mask, action], axis=-1))
 
     # encoder for perturbation goals
     g_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
-                         out_layer=None, use_ln=True, cold_init=True)
-    genc_input_a = jnp.concatenate([mask, jnp.ones_like(mask)], axis=0)
-    genc_input_b = jnp.concatenate([mask * pert_goal, pert_goal], axis=0)
-    g_repr_joint = g_encoder(jnp.concatenate([genc_input_a, genc_input_b], axis=1))
-    g_repr = g_repr_joint[:mask.shape[0], :]
-    g_repr_full = g_repr_joint[mask.shape[0]:, :]
-    return sag_repr, g_repr, g_repr_full
+                         out_layer=None)
+    genc_input = jnp.concatenate([mask, mask * pert_goal], axis=1)
+    g_repr = g_encoder(genc_input)
+    return sag_repr, g_repr
 
   def _combine_repr(sag_repr, g_repr):
     return jax.numpy.einsum('ik,jk->ij', sag_repr, g_repr)
 
   def _critic_fn(obs_packed, action, pert_goal):
-    sag_repr, g_repr, g_repr_full = \
+    sag_repr, g_repr = \
       _repr_fn(obs_packed, action, pert_goal)
     critic_val = _combine_repr(sag_repr, g_repr)
-    critic_val_full = _combine_repr(sag_repr, g_repr_full)
-    return critic_val, critic_val_full, sag_repr, g_repr, g_repr_full
+    return critic_val, sag_repr, g_repr
 
   def _actor_fn(obs_packed):
     # input like [state; goal; mask]
@@ -156,8 +185,8 @@ def make_networks(
     # -- [state; goal; mask; pert_goal]
     dist_layer = NormalTanhDistribution(
       action_dim, min_scale=actor_min_std, rescale=0.99)
-    network = make_mlp(
-      hidden_layer_sizes, out_size=None, out_layer=dist_layer, use_ln=True)
+    network = make_mlp(hidden_layer_sizes, out_size=None,
+                       out_layer=dist_layer)
     return network(obs_packed)
 
   policy = hk.transform(_actor_fn)
