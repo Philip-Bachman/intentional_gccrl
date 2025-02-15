@@ -130,14 +130,20 @@ class FancyEnvironmentLoop(core.Worker):
   def _get_goal(self, timestep):
     """Pull the goal from the given timestep's observation.
     """
-    goal = timestep.observation[self._obs_dim:(self._obs_dim + self._goal_dim)].copy()
+    goal = timestep.observation[self._obs_dim:(2 * self._obs_dim)].copy()
     return goal
 
-  def _set_goal(self, timestep, new_goal=None):
+  def _set_goal(self, timestep, goal=None):
     """Bypass the environment's goal and force a new goal.
     """
-    if new_goal is not None:
-      timestep.observation[self._obs_dim:(self._obs_dim + self._goal_dim)] = new_goal
+    if goal is not None:
+      timestep.observation[self._obs_dim:(2 * self._obs_dim)] = goal
+    return timestep
+  
+  def _set_latent(self, timestep, latent=None):
+    """Add a latent variable to timestep.observation.
+    """
+    timestep.observation[(3 * self._obs_dim):(4 * self._obs_dim)] = latent
     return timestep
   
   def _render_frame(self, success=False):
@@ -159,7 +165,7 @@ class FancyEnvironmentLoop(core.Worker):
     new_buffer = collections.deque(maxlen=self._frame_buffer.maxlen)
     # set parameters for video writer/rendering
     fps, height, width = 30, 480, 640  # Frames per second
-    output_path = 'video_box2_actor_sgcrl_555_simba_eps_{}.avi'.format(counts['actor_episodes'])
+    output_path = 'video_box2_actor_actsim10_555_eps_{}.avi'.format(counts['actor_episodes'])
     fourcc = cv2.VideoWriter_fourcc(*'XVID')  # Codec (e.g., 'XVID', 'mp4v', etc.)
     # create VideoWriter object
     video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
@@ -192,6 +198,9 @@ class FancyEnvironmentLoop(core.Worker):
     episode_rnd_goal = None
     episode_success = False
 
+    # get a random latent variable to use throughout this episode
+    episode_latent = np.random.randn(self._obs_dim)
+
     # For evaluation, this keeps track of the total undiscounted reward
     # accumulated during the episode.
     episode_return = tree.map_structure(_generate_zeros_from_spec,
@@ -203,6 +212,8 @@ class FancyEnvironmentLoop(core.Worker):
       if (not self._use_env_goal) and (np.random.rand() < 0.8):
         episode_rnd_goal = self._goal_buffer.sample(1)[0]
         timestep = self._set_goal(timestep, episode_rnd_goal)
+    # add a latent variable to the timestep's observation
+    self._set_latent(timestep, episode_latent)
 
     # set flag for whether to render this episode to the frame buffer
     render_episode = False
@@ -240,8 +251,11 @@ class FancyEnvironmentLoop(core.Worker):
         # add a "viable" goal to the local goal buffer
         # -- for now, we treat visited states as viable goals
         self._goal_buffer.append(timestep.observation[:self._obs_dim])
+      # modify the environment goal if desired
       if episode_rnd_goal is not None:
         timestep = self._set_goal(timestep, episode_rnd_goal)
+      # add a latent variable to the timestep's observation
+      self._set_latent(timestep, episode_latent)
 
       # Have the agent and observers observe the timestep.
       self._actor.observe(action, next_timestep=timestep)

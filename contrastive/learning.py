@@ -94,19 +94,23 @@ class ContrastiveLearner(acme.Learner):
 
       I = jnp.eye(batch_size)
 
-      # each (state, policy goal, perturbation goal) tuple corresponds to:
-      state = transitions.extras['state_current']      # current state
-      goal_mask_latent = transitions.extras['goal_mask_latent']  # packed like [goal; mask; latent]
-      pert_goal = transitions.extras['state_future']   # state we perturb towards
+      # state       : current state
+      # goal        : goal of policy that produced this (state, future state) pair
+      # pert_goal   : discounted future state
+      odim = self._obs_dim
+      state = transitions.extras['state_current']
+      goal = transitions.extras['goal_mask_latent'][:, :odim]
+      mask = transitions.extras['goal_mask_latent'][:, odim:(2 * odim)]
+      latent = transitions.extras['goal_mask_latent'][:, (2 * odim):(3 * odim)]
+      pert_goal = transitions.extras['state_future']
       action = transitions.action
-      obs_packed = jnp.concatenate([state, goal_mask_latent], axis=1)
 
       # ...
-      key, q_key = jax.random.split(key)
+      obs_packed = jnp.concatenate([state, goal, mask, latent], axis=1)
 
       # compute logits for use in infonce loss
       logits, sag_repr, g_repr = \
-        networks.q_network.apply(q_params, q_key, obs_packed, action, pert_goal)
+        networks.q_network.apply(q_params, obs_packed, action, pert_goal)
 
       def loss_fn(_logits):
         # compute infonce loss + logsumexp regularization (on partition func)
@@ -162,43 +166,63 @@ class ContrastiveLearner(acme.Learner):
       pert_goal = transitions.extras['state_future']
       pert_goal_shuffled = jnp.roll(pert_goal, 1, axis=0)
 
-      # ...
-      key, p_key, q_key = jax.random.split(key, 3)
+      # sample two independent batches of latents for conditioning the actor
+      key, key_1, key_2 = jax.random.split(key, 3)
+      latent_1 = jax.random.normal(key_1, shape=latent.shape, dtype=latent.dtype)
+      latent_2 = jax.random.normal(key_2, shape=latent.shape, dtype=latent.dtype)
 
       # train actor 50/50 on intra-episode future states and random states
       train_state = jnp.concatenate([state, state], axis=0)
       train_goal = jnp.concatenate([goal, goal], axis=0)
       train_mask = jnp.concatenate([mask, mask], axis=0)
       train_pert_goal = jnp.concatenate([pert_goal, pert_goal_shuffled], axis=0)
+      train_latent_1 = jnp.concatenate([latent_1, latent_1], axis=0)
+      train_latent_2 = jnp.concatenate([latent_2, latent_2], axis=0)
 
-      obs_packed = jnp.concatenate([train_state, train_goal, train_mask], axis=-1)
-      policy_input = jnp.concatenate([obs_packed, train_pert_goal], axis=1)
-      dist_params = networks.policy_network.apply(policy_params, p_key, policy_input)
-      action = networks.sample(dist_params, key)
-      action_log_prob = networks.log_prob(dist_params, action)
+      # make packed inputs for both batches of latents
+      obs_packed_1 = jnp.concatenate([train_state, train_pert_goal,
+                                      train_mask, train_latent_1], axis=-1)
+      obs_packed_2 = jnp.concatenate([train_state, train_pert_goal,
+                                      train_mask, train_latent_2], axis=-1)
+  
+      # compute actor output for both batches of latents
+      key, key_1, key_2 = jax.random.split(key, 3)
+      dist_params_1 = networks.policy_network.apply(policy_params, obs_packed_1)
+      action_1 = networks.sample(dist_params_1, key_1)
+      dist_params_2 = networks.policy_network.apply(policy_params, obs_packed_2)
+      action_2 = networks.sample(dist_params_2, key_2)
 
-      # compute loss for optimizing goal-conditioned actor
-      q_action, sag_repr, g_repr = \
-        networks.q_network.apply(q_params, q_key, obs_packed, action, train_pert_goal)
-      actor_loss = -jnp.diag(q_action) # negative -(Q): maximize Q
-
-      # action entropy loss
-      approx_entropy = -action_log_prob
-
-      if config.use_action_entropy:
-        actor_loss -= 0.000 * approx_entropy # negative -(-log prob): maximize entropy
-
+      # compute critic output for actor actions for both batches of latents
+      q_action_1, sag_repr_1, g_repr_1 = \
+        networks.q_network.apply(q_params, obs_packed_1, action_1, train_pert_goal)
+      q_action_2, sag_repr_2, g_repr_2 = \
+        networks.q_network.apply(q_params, obs_packed_2, action_2, train_pert_goal)
+      
       # split up actor loss into chunks with different meaning
-      chunk_size = actor_loss.shape[0] // 2
+      chunk_size = q_action_1.shape[0] // 2
+      actor_loss = -(jnp.diag(q_action_1) + jnp.diag(q_action_2))
       actor_loss_pert_goal = jnp.mean(actor_loss[:chunk_size])
       actor_loss_pert_goal_shuffled = jnp.mean(actor_loss[chunk_size:])
       loss_sgcrl = 0.5 * (actor_loss_pert_goal + actor_loss_pert_goal_shuffled)
       actor_loss = loss_sgcrl
 
+      # compute cos sim between critic SAG representations for the actions
+      # sampled from the actor for two different values of latent
+      ent_repr_1 = action_1  # sag_repr_1
+      ent_repr_2 = action_2  # sag_repr_2
+      dot_product = jnp.sum(ent_repr_1 * ent_repr_2, axis=1)
+      norm_1 = jnp.linalg.norm(ent_repr_1, axis=1)
+      norm_2 = jnp.linalg.norm(ent_repr_2, axis=1)
+      cosim_12 = dot_product / (norm_1 * norm_2 + 1e-6)
+      cosim_12 = jnp.mean(cosim_12)
+
+      # minimize cosine similarity between SAG reprs for 
+      actor_loss = actor_loss + 1.0 * cosim_12
+
       metrics = {
-          'entropy_mean': jnp.mean(approx_entropy),
           'actor_loss_pert_goal': actor_loss_pert_goal,
-          'actor_loss_pert_goal_shuffled': actor_loss_pert_goal_shuffled
+          'actor_loss_pert_goal_shuffled': actor_loss_pert_goal_shuffled,
+          'actor_loss_cosim_12': cosim_12
       }
       return actor_loss, metrics
 

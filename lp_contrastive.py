@@ -56,6 +56,8 @@ def get_program(params):
 
   assert (dummy_env.action_spec().minimum == -1).all()
   assert (dummy_env.action_spec().maximum == 1).all()
+  print('DUMMY_ENV.ACTION_SPEC: {}'.format(dummy_env.action_spec()))
+
   config.obs_dim = dummy_env.obs_dim
   config.goal_dim = dummy_env.goal_dim
   config.max_episode_steps = getattr(dummy_env, '_step_limit') + 1

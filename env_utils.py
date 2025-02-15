@@ -47,7 +47,7 @@ def load(env_name, fixed_goal=None):
   # Disable type checking in line below because different environments have
   # different kwargs, which pytype doesn't reason about.
   gym_env = CLASS(**kwargs)  # pytype: disable=wrong-keyword-args
-  obs_dim = gym_env.observation_space.shape[0] // 3
+  obs_dim = gym_env.observation_space.shape[0] // 4
   return gym_env, obs_dim, max_episode_steps
 
 
@@ -315,8 +315,8 @@ class SawyerBox2(
     self._freeze_rand_vec2 = False
     dummy_obs = self.reset()
     # make obs_dim and goal_dim easily accessible
-    self.obs_dim = dummy_obs.shape[0] // 3
-    self.goal_dim = dummy_obs.shape[0] // 3
+    self.obs_dim = dummy_obs.shape[0] // 4
+    self.goal_dim = dummy_obs.shape[0] // 4
 
   def reset(self):
     super(SawyerBox2, self).reset()
@@ -410,11 +410,11 @@ class SawyerBox2(
       mask = self.goal_mask_all
     else:
       assert False
-    return np.concatenate([obs, goal, mask]).astype(np.float32)
+    return np.concatenate([obs, goal, mask, 0. * mask]).astype(np.float32)
 
   @property
   def observation_space(self):
     return gym.spaces.Box(
-        low=np.full(3 * 14, -np.inf),
-        high=np.full(3 * 14, np.inf),
+        low=np.full(4 * 14, -np.inf),
+        high=np.full(4 * 14, np.inf),
         dtype=np.float32)

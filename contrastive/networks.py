@@ -44,8 +44,8 @@ def apply_policy_and_sample(
     raise ValueError('sample function is not provided')
 
   def apply_and_sample(params, key, obs):
-    key, key_a, key_s = jax.random.split(key, 3)
-    return sample_fn(networks.policy_network.apply(params, key_a, obs), key_s)
+    key, key_s = jax.random.split(key, 2)
+    return sample_fn(networks.policy_network.apply(params, obs), key_s)
   return apply_and_sample
 
 
@@ -90,7 +90,7 @@ def make_mlp(
     hidden_layer_sizes,
     out_size=None,
     out_layer=None,
-    simba=True
+    simba=False
 ):
   # user should provide either out_size or out_layer
   assert (out_size is None) or (out_layer is None)
@@ -141,10 +141,9 @@ def make_networks(
 
     # encoder for (state, action, goal, mask)
     # -- mask indicates which dims of goal are relevant
-    # -- TODO: test if/when conditioning on goal can work...
     sag_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                            out_layer=None)
-    sag_input = jnp.concatenate([state, action, 0. * goal, mask], axis=-1)
+    sag_input = jnp.concatenate([state, 0. * goal, mask, action], axis=-1)
     sag_repr = sag_encoder(sag_input)
 
     # encoder for perturbation goals
@@ -167,15 +166,25 @@ def make_networks(
   def _actor_fn(obs_packed):
     # packed input like: [state; goal; mask; latent]
     assert (obs_packed.shape[1] == (4 * obs_dim))
+
+    # unpack observation and do whatever...
+    state = obs_packed[:, :obs_dim]
+    goal = obs_packed[:, obs_dim:(2 * obs_dim)]
+    mask = obs_packed[:, (2 * obs_dim):(3 * obs_dim)]
+    latent = obs_packed[:, (3 * obs_dim):(4 * obs_dim)]
+
+    obs_packed = jnp.concatenate([state, goal, mask, 0.1 * latent], axis=-1)
+
     # apply actor network to input
     dist_layer = NormalTanhDistribution(
       action_dim, min_scale=actor_min_std, rescale=0.99)
     network = make_mlp(hidden_layer_sizes, out_size=None,
                        out_layer=dist_layer)
-    return network(obs_packed)
+    policy_dist = network(obs_packed)
+    return policy_dist
 
-  policy = hk.transform(_actor_fn)
-  critic = hk.transform(_critic_fn)
+  policy = hk.without_apply_rng(hk.transform(_actor_fn))
+  critic = hk.without_apply_rng(hk.transform(_critic_fn))
 
   # create dummy observations and actions to create network parameters.
   # -- it's important to note that the "observation" expected here is a

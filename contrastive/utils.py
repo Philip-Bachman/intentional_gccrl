@@ -81,10 +81,10 @@ class DistanceObserver(observers_base.EnvLoopObserver):
       # if environment doesn't provide a built-in distance metric, then
       # we'll just use simple euclidean distance.
       # -- we assume packed observation like [state; policy goal]
-      obs_dim = timestep.observation.shape[0] // 3
+      obs_dim = timestep.observation.shape[0] // 4
       obs = timestep.observation[:obs_dim]
       goal = timestep.observation[obs_dim:(2 * obs_dim)]
-      mask = timestep.observation[(2 * obs_dim):]
+      mask = timestep.observation[(2 * obs_dim):(3 * obs_dim)]
       dist = np.linalg.norm(mask * (obs - goal))
       return dist
 

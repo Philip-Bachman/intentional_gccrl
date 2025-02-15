@@ -25,7 +25,7 @@ class ContrastiveConfig:
   use_env_goal: bool = True
     
   # Loss options
-  batch_size: int = 384
+  batch_size: int = 256
   learning_rate: float = 3e-4
   reward_scale: float = 1
   discount: float = 0.99
@@ -43,7 +43,7 @@ class ContrastiveConfig:
 
   # Replay options
   min_replay_size: int = 10000
-  max_replay_size: int = 1000000
+  max_replay_size: int = 2000000
   replay_table_name: str = adders_reverb.DEFAULT_PRIORITY_TABLE
   prefetch_size: int = 4
   num_parallel_calls: Optional[int] = 4
