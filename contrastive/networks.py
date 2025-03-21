@@ -139,11 +139,15 @@ def make_networks(
     mask = obs_packed[:, (2 * obs_dim):(3 * obs_dim)]
     latent = obs_packed[:, (3 * obs_dim):(4 * obs_dim)]
 
+    # TEMP -- diff-ish goal
+    goal = goal - state
+    pert_goal = pert_goal - state
+
     # encoder for (state, action, goal, mask)
     # -- mask indicates which dims of goal are relevant
     sag_encoder = make_mlp(hidden_layer_sizes, out_size=repr_dim,
                            out_layer=None)
-    sag_input = jnp.concatenate([state, 0. * goal, mask, action], axis=-1)
+    sag_input = jnp.concatenate([state, 1. * goal, mask, action], axis=-1)
     sag_repr = sag_encoder(sag_input)
 
     # encoder for perturbation goals
@@ -173,7 +177,10 @@ def make_networks(
     mask = obs_packed[:, (2 * obs_dim):(3 * obs_dim)]
     latent = obs_packed[:, (3 * obs_dim):(4 * obs_dim)]
 
-    obs_packed = jnp.concatenate([state, goal, mask, 0.1 * latent], axis=-1)
+    # TEMP -- diff-ish goal
+    goal = goal - state
+
+    obs_packed = jnp.concatenate([state, goal, mask, 0.0 * latent], axis=-1)
 
     # apply actor network to input
     dist_layer = NormalTanhDistribution(

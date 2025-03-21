@@ -165,7 +165,7 @@ class FancyEnvironmentLoop(core.Worker):
     new_buffer = collections.deque(maxlen=self._frame_buffer.maxlen)
     # set parameters for video writer/rendering
     fps, height, width = 30, 480, 640  # Frames per second
-    output_path = 'video_box2_actor_actsim10_555_eps_{}.avi'.format(counts['actor_episodes'])
+    output_path = 'video_box2_diffgoal_cosimNONZ_gcc_333_eps_{}.avi'.format(counts['actor_episodes'])
     fourcc = cv2.VideoWriter_fourcc(*'XVID')  # Codec (e.g., 'XVID', 'mp4v', etc.)
     # create VideoWriter object
     video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))

@@ -144,6 +144,45 @@ class ContrastiveLearner(acme.Learner):
           'loss_norm_sag': loss_norm_sag,
           'loss_norm_g': loss_norm_g
       }
+
+      # ##########################################
+      # # ACTOR LOSS FOR PICKING DIVERSE ACTIONS #
+      # ##########################################
+
+      # # make packed inputs for both batches of latents
+      # key, key_1, key_2 = jax.random.split(key, 3)
+      # latent_1 = jax.random.normal(key_1, shape=latent.shape, dtype=latent.dtype)
+      # latent_2 = jax.random.normal(key_2, shape=latent.shape, dtype=latent.dtype)
+      # obs_packed_1 = jnp.concatenate([state, pert_goal, mask, latent_1], axis=-1)
+      # obs_packed_2 = jnp.concatenate([state, pert_goal, mask, latent_2], axis=-1)
+  
+      # # compute actor output for both batches of latents
+      # key, key_1, key_2 = jax.random.split(key, 3)
+      # dist_params_1 = networks.policy_network.apply(policy_params, obs_packed_1)
+      # action_1 = networks.sample(dist_params_1, key_1)
+      # dist_params_2 = networks.policy_network.apply(policy_params, obs_packed_2)
+      # action_2 = networks.sample(dist_params_2, key_2)
+
+      # # compute critic output for actor actions for both batches of latents
+      # q_action_1, sag_repr_1, g_repr_1 = \
+      #   networks.q_network.apply(q_params, obs_packed_1, action_1, pert_goal)
+      # q_action_2, sag_repr_2, g_repr_2 = \
+      #   networks.q_network.apply(q_params, obs_packed_2, action_2, pert_goal)
+
+      # # compute similarity between results of actions for different latents
+      # ent_repr_1 = sag_repr_1  # sag_repr_1 or action_1
+      # ent_repr_2 = sag_repr_2  # sag_repr_2 or action_2
+      # dot_product = jnp.sum(ent_repr_1 * ent_repr_2, axis=1)
+      # norm_1 = jnp.linalg.norm(ent_repr_1, axis=1)
+      # norm_2 = jnp.linalg.norm(ent_repr_2, axis=1)
+      # cosim_12 = dot_product / (norm_1 * norm_2 + 1e-6)
+      # cosim_12 = jnp.mean(cosim_12)
+
+      # #########################
+      # # COMBINE CRITIC LOSSES #
+      # #########################
+      # loss = loss + 0.001 * cosim_12
+
       return loss, metrics
 
     def actor_loss(
@@ -197,8 +236,21 @@ class ContrastiveLearner(acme.Learner):
         networks.q_network.apply(q_params, obs_packed_1, action_1, train_pert_goal)
       q_action_2, sag_repr_2, g_repr_2 = \
         networks.q_network.apply(q_params, obs_packed_2, action_2, train_pert_goal)
-      
-      # split up actor loss into chunks with different meaning
+
+      ##########################################
+      # ACTOR LOSS FOR PICKING DIVERSE ACTIONS #
+      ##########################################
+      ent_repr_1 = sag_repr_1  # sag_repr_1 or action_1
+      ent_repr_2 = sag_repr_2  # sag_repr_2 or action_2
+      dot_product = jnp.sum(ent_repr_1 * ent_repr_2, axis=1)
+      norm_1 = jnp.linalg.norm(ent_repr_1, axis=1)
+      norm_2 = jnp.linalg.norm(ent_repr_2, axis=1)
+      cosim_12 = dot_product / (norm_1 * norm_2 + 1e-6)
+      cosim_12 = jnp.mean(cosim_12)
+
+      #######################################
+      # ACTOR LOSS FOR PICKING GOOD ACTIONS #
+      #######################################
       chunk_size = q_action_1.shape[0] // 2
       actor_loss = -(jnp.diag(q_action_1) + jnp.diag(q_action_2))
       actor_loss_pert_goal = jnp.mean(actor_loss[:chunk_size])
@@ -206,18 +258,8 @@ class ContrastiveLearner(acme.Learner):
       loss_sgcrl = 0.5 * (actor_loss_pert_goal + actor_loss_pert_goal_shuffled)
       actor_loss = loss_sgcrl
 
-      # compute cos sim between critic SAG representations for the actions
-      # sampled from the actor for two different values of latent
-      ent_repr_1 = action_1  # sag_repr_1
-      ent_repr_2 = action_2  # sag_repr_2
-      dot_product = jnp.sum(ent_repr_1 * ent_repr_2, axis=1)
-      norm_1 = jnp.linalg.norm(ent_repr_1, axis=1)
-      norm_2 = jnp.linalg.norm(ent_repr_2, axis=1)
-      cosim_12 = dot_product / (norm_1 * norm_2 + 1e-6)
-      cosim_12 = jnp.mean(cosim_12)
-
       # minimize cosine similarity between SAG reprs for 
-      actor_loss = actor_loss + 1.0 * cosim_12
+      actor_loss = actor_loss + 0.0 * cosim_12
 
       metrics = {
           'actor_loss_pert_goal': actor_loss_pert_goal,
